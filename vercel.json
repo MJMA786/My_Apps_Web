@@ -3,7 +3,13 @@
   "services": {
     "client": {
       "root": "client",
-      "framework": "vite"
+      "framework": "vite",
+      "rewrites": [
+        {
+          "source": "/(.*)",
+          "destination": "/index.html"
+        }
+      ]
     },
     "server": {
       "root": "server",
@@ -24,19 +30,8 @@
       "destination": { "service": "server" }
     },
     {
-      "source": "/assets/(.*)",
-      "destination": { "service": "client" }
-    },
-    {
       "source": "/(.*)",
-      "destination": { "service": "client" },
-      "transforms": [
-        {
-          "type": "request.path",
-          "op": "set",
-          "args": "/index.html"
-        }
-      ]
+      "destination": { "service": "client" }
     }
   ]
 }
