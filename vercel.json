@@ -16,6 +16,14 @@
       "destination": { "service": "server" }
     },
     {
+      "source": "/uploads/(.*)",
+      "destination": { "service": "server" }
+    },
+    {
+      "source": "/demo-icons/(.*)",
+      "destination": { "service": "server" }
+    },
+    {
       "source": "/(.*)",
       "destination": { "service": "client" }
     }
