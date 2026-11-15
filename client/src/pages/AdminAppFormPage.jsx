@@ -72,9 +72,29 @@ export default function AdminAppFormPage() {
 
   // Check Google Drive connection
   useEffect(() => {
-    api.getDriveStatus()
-      .then(res => setDriveConfigured(Boolean(res.configured)))
-      .catch(() => {});
+    async function checkDrive() {
+      try {
+        let stored = null;
+        try {
+          stored = JSON.parse(localStorage.getItem('myapps_drive_auth') || 'null');
+        } catch {}
+
+        let res = await api.getDriveStatus();
+        if ((!res.configured || !res.oauthConnected) && stored && stored.tokens) {
+          try {
+            const syncRes = await api.syncDriveAuth(stored);
+            if (syncRes.status) {
+              res = syncRes.status;
+            }
+          } catch {}
+        }
+        setDriveConfigured(Boolean(res.configured));
+      } catch {
+        const hasLocal = Boolean(localStorage.getItem('myapps_drive_auth'));
+        setDriveConfigured(hasLocal);
+      }
+    }
+    checkDrive();
   }, []);
 
   // Auto-slugify when title changes in creation mode

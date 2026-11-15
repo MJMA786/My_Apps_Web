@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 import './db.js'; // Initializes database and seeds
 import { uploadsDir } from './db.js';
+import { syncDriveAuth } from './services/googleDrive.js';
 import authRoutes from './routes/auth.js';
 import appsRoutes from './routes/apps.js';
 import adminRoutes from './routes/admin.js';
@@ -21,6 +22,20 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Auto-hydrate Drive authentication if passed by client via x-drive-auth header (solves serverless ephemeral cold starts)
+app.use((req, res, next) => {
+  const driveAuthHeader = req.headers['x-drive-auth'];
+  if (driveAuthHeader) {
+    try {
+      const data = typeof driveAuthHeader === 'string' ? JSON.parse(driveAuthHeader) : driveAuthHeader;
+      syncDriveAuth(data);
+    } catch (e) {
+      console.warn('[Server] Error restoring drive auth from header:', e.message);
+    }
+  }
+  next();
+});
 
 // Serve Uploads Directory
 app.use('/uploads', express.static(uploadsDir));

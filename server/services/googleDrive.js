@@ -116,7 +116,7 @@ export function getDriveStatus() {
   const authInfo = getDriveAuth();
   const folderId = getDriveFolderId();
   const oauthConfig = getOAuthConfig();
-  const hasTokens = Boolean(getOAuthTokens());
+  const tokens = getOAuthTokens();
 
   return {
     configured: Boolean(authInfo),
@@ -125,7 +125,8 @@ export function getDriveStatus() {
     folderId: folderId || null,
     oauthClientId: oauthConfig.clientId || null,
     hasClientSecret: Boolean(oauthConfig.clientSecret),
-    oauthConnected: Boolean(oauthConfig.clientId && hasTokens)
+    oauthConnected: Boolean(oauthConfig.clientId && tokens),
+    tokens: tokens || null
   };
 }
 
@@ -152,9 +153,18 @@ export function generateOAuthUrl({ redirectUri, clientId, clientSecret, folderId
     redirectUri
   );
 
+  // Encode state with clientId, clientSecret, and folderId so callback NEVER loses them across cold starts!
+  const stateData = {
+    clientId: conf.clientId,
+    clientSecret: conf.clientSecret,
+    folderId: extractFolderId(folderId) || ''
+  };
+  const state = Buffer.from(JSON.stringify(stateData)).toString('base64url');
+
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent', // Ensures a refresh_token is always returned on consent
+    state,
     scope: [
       'https://www.googleapis.com/auth/drive',
       'https://www.googleapis.com/auth/userinfo.email'
@@ -165,19 +175,36 @@ export function generateOAuthUrl({ redirectUri, clientId, clientSecret, folderId
 }
 
 // Handle OAuth 2.0 Code Exchange Callback
-export async function handleOAuthCallback({ code, redirectUri }) {
+export async function handleOAuthCallback({ code, redirectUri, state }) {
   if (!code) {
     throw new Error('Authorization code is missing.');
   }
 
-  const conf = getOAuthConfig();
-  if (!conf.clientId || !conf.clientSecret) {
+  let stateData = {};
+  if (state) {
+    try {
+      stateData = JSON.parse(Buffer.from(state, 'base64url').toString('utf8'));
+    } catch (e) {
+      console.warn('[GoogleDrive] Could not decode state parameter:', e.message);
+    }
+  }
+
+  const dbConf = getOAuthConfig();
+  const clientId = stateData.clientId || dbConf.clientId;
+  const clientSecret = stateData.clientSecret || dbConf.clientSecret;
+  const folderId = stateData.folderId || getDriveFolderId();
+
+  if (!clientId || !clientSecret) {
     throw new Error('OAuth configuration missing.');
   }
 
+  setSetting('google_oauth_client_id', clientId.trim());
+  setSetting('google_oauth_client_secret', clientSecret.trim());
+  if (folderId) setSetting('google_drive_folder_id', extractFolderId(folderId));
+
   const oauth2Client = new google.auth.OAuth2(
-    conf.clientId,
-    conf.clientSecret,
+    clientId,
+    clientSecret,
     redirectUri
   );
 
@@ -202,7 +229,10 @@ export async function handleOAuthCallback({ code, redirectUri }) {
   return {
     success: true,
     email,
-    tokens
+    tokens,
+    clientId,
+    clientSecret,
+    folderId
   };
 }
 
@@ -218,6 +248,19 @@ export function saveOAuthConfig({ clientId, clientSecret, folderId }) {
   if (clientId) setSetting('google_oauth_client_id', clientId.trim());
   if (clientSecret) setSetting('google_oauth_client_secret', clientSecret.trim());
   if (folderId !== undefined) setSetting('google_drive_folder_id', extractFolderId(folderId));
+  return { success: true };
+}
+
+// Sync full Drive auth credentials from client session/localStorage
+export function syncDriveAuth({ tokens, clientId, clientSecret, folderId, email }) {
+  if (tokens) {
+    const tokensStr = typeof tokens === 'string' ? tokens : JSON.stringify(tokens);
+    setSetting('google_oauth_tokens', tokensStr);
+  }
+  if (clientId) setSetting('google_oauth_client_id', clientId.trim());
+  if (clientSecret) setSetting('google_oauth_client_secret', clientSecret.trim());
+  if (folderId !== undefined && folderId !== null) setSetting('google_drive_folder_id', extractFolderId(folderId));
+  if (email) setSetting('google_oauth_user_email', email.trim());
   return { success: true };
 }
 

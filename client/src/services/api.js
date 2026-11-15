@@ -30,6 +30,13 @@ function getAuthHeaders(isFormData = false) {
   if (!isFormData) {
     headers['Content-Type'] = 'application/json';
   }
+  // Inject Google Drive Auth so serverless cold starts never lose credentials
+  try {
+    const driveAuth = localStorage.getItem('myapps_drive_auth');
+    if (driveAuth) {
+      headers['x-drive-auth'] = driveAuth;
+    }
+  } catch {}
   return headers;
 }
 
@@ -320,7 +327,19 @@ export const api = {
     return parseJsonResponse(res, 'Failed to save Google OAuth configuration');
   },
 
+  async syncDriveAuth(authData) {
+    const res = await fetch(`${API_BASE}/admin/drive/oauth/sync`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(authData)
+    });
+    return parseJsonResponse(res, 'Failed to sync Drive authentication');
+  },
+
   async disconnectDriveOAuth() {
+    try {
+      localStorage.removeItem('myapps_drive_auth');
+    } catch {}
     const res = await fetch(`${API_BASE}/admin/drive/oauth/disconnect`, {
       method: 'POST',
       headers: getAuthHeaders()

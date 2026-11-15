@@ -15,7 +15,8 @@ import {
   generateOAuthUrl,
   handleOAuthCallback,
   disconnectOAuth,
-  saveOAuthConfig
+  saveOAuthConfig,
+  syncDriveAuth
 } from '../services/googleDrive.js';
 
 const router = express.Router();
@@ -23,7 +24,7 @@ const router = express.Router();
 // Public callback route for Google OAuth redirect
 router.get('/drive/callback', async (req, res) => {
   try {
-    const { code } = req.query;
+    const { code, state } = req.query;
     if (!code) {
       return res.redirect('/admin/settings?error=' + encodeURIComponent('Missing authorization code from Google.'));
     }
@@ -32,8 +33,17 @@ router.get('/drive/callback', async (req, res) => {
     const host = req.headers['x-forwarded-host'] || req.get('host');
     const redirectUri = `${proto}://${host}/api/admin/drive/callback`;
 
-    await handleOAuthCallback({ code, redirectUri });
+    const result = await handleOAuthCallback({ code, redirectUri, state });
     
+    // Store in browser localStorage on return!
+    const authPayload = {
+      tokens: result.tokens,
+      email: result.email,
+      clientId: result.clientId,
+      clientSecret: result.clientSecret,
+      folderId: result.folderId || ''
+    };
+
     // Return friendly HTML confirmation page that smoothly transitions to admin settings
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(`<!DOCTYPE html>
@@ -111,10 +121,15 @@ router.get('/drive/callback', async (req, res) => {
   <div class="card">
     <div class="badge">✓</div>
     <h1>Google Drive Connected!</h1>
-    <p>Your personal Google account has been authorized. You can now upload and manage APKs with 15 GB storage.</p>
+    <p>Connected as <strong>${result.email}</strong>. Saving authentication to your browser and returning to settings...</p>
     <a href="/admin/settings?drive_connected=true" class="btn" id="returnBtn">Continue to Settings &rarr;</a>
   </div>
   <script>
+    try {
+      localStorage.setItem('myapps_drive_auth', JSON.stringify(${JSON.stringify(authPayload)}));
+    } catch (e) {
+      console.error('Failed to store drive auth in localStorage:', e);
+    }
     setTimeout(function() {
       window.location.href = '/admin/settings?drive_connected=true';
     }, 600);
@@ -233,6 +248,18 @@ router.post('/drive/oauth/config', (req, res) => {
     const { clientId, clientSecret, folderId } = req.body;
     saveOAuthConfig({ clientId, clientSecret, folderId });
     res.json({ success: true, message: 'Google OAuth configuration saved.' });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Sync Drive Auth credentials from browser localStorage (resilient to serverless cold starts)
+router.post('/drive/oauth/sync', (req, res) => {
+  try {
+    const { tokens, clientId, clientSecret, folderId, email } = req.body;
+    syncDriveAuth({ tokens, clientId, clientSecret, folderId, email });
+    const status = getDriveStatus();
+    res.json({ success: true, status });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

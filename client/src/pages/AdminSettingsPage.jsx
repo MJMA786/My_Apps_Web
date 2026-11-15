@@ -37,13 +37,23 @@ export default function AdminSettingsPage() {
   const [driveTestResult, setDriveTestResult] = useState(null);
   const [activeTab, setActiveTab] = useState('oauth'); // 'oauth' | 'service_account'
   
+  const getStoredAuth = () => {
+    try {
+      return JSON.parse(localStorage.getItem('myapps_drive_auth') || '{}');
+    } catch {
+      return {};
+    }
+  };
+
+  const storedAuth = getStoredAuth();
   // OAuth 2.0 states
-  const [clientIdInput, setClientIdInput] = useState('');
-  const [clientSecretInput, setClientSecretInput] = useState('');
-  const [folderIdInput, setFolderIdInput] = useState('');
+  const [clientIdInput, setClientIdInput] = useState(() => storedAuth.clientId || localStorage.getItem('myapps_drive_client_id') || '');
+  const [clientSecretInput, setClientSecretInput] = useState(() => storedAuth.clientSecret || localStorage.getItem('myapps_drive_client_secret') || '');
+  const [folderIdInput, setFolderIdInput] = useState(() => storedAuth.folderId || localStorage.getItem('myapps_drive_folder_id') || '');
   const [connectingOAuth, setConnectingOAuth] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [copiedRedirectUri, setCopiedRedirectUri] = useState(false);
+  const [copiedVercelEnv, setCopiedVercelEnv] = useState(false);
 
   // Service Account states (Legacy)
   const [keyJsonInput, setKeyJsonInput] = useState('');
@@ -65,7 +75,25 @@ export default function AdminSettingsPage() {
   // Load status & handle OAuth return URL params
   const loadDriveStatus = async () => {
     try {
-      const status = await api.getDriveStatus();
+      let stored = null;
+      try {
+        stored = JSON.parse(localStorage.getItem('myapps_drive_auth') || 'null');
+      } catch {}
+
+      let status = await api.getDriveStatus();
+
+      // If server does not report configured or oauthConnected, but browser has tokens stored, sync them!
+      if ((!status.configured || !status.oauthConnected) && stored && stored.tokens) {
+        try {
+          const syncRes = await api.syncDriveAuth(stored);
+          if (syncRes.status) {
+            status = syncRes.status;
+          }
+        } catch (syncErr) {
+          console.warn('Auto-sync drive auth error:', syncErr);
+        }
+      }
+
       setDriveStatus(status);
       if (status.folderId) {
         setFolderIdInput(status.folderId);
@@ -77,7 +105,9 @@ export default function AdminSettingsPage() {
         try {
           const test = await api.testDriveConnection();
           setDriveTestResult(test);
-        } catch {}
+        } catch (testErr) {
+          setDriveTestResult({ error: testErr.message });
+        }
       }
     } catch (err) {
       console.warn('Could not fetch drive status:', err);
@@ -106,6 +136,28 @@ export default function AdminSettingsPage() {
     }
   };
 
+  // Copy Vercel environment variables helper
+  const handleCopyVercelEnv = () => {
+    const stored = getStoredAuth();
+    const tokens = driveStatus.tokens || stored.tokens;
+    const cid = clientIdInput || driveStatus.oauthClientId || stored.clientId || '';
+    const secret = clientSecretInput || stored.clientSecret || '';
+    const fid = folderIdInput || driveStatus.folderId || stored.folderId || '';
+
+    const lines = [
+      cid ? `GOOGLE_OAUTH_CLIENT_ID=${cid}` : '',
+      secret ? `GOOGLE_OAUTH_CLIENT_SECRET=${secret}` : '',
+      tokens ? `GOOGLE_OAUTH_TOKENS=${typeof tokens === 'string' ? tokens : JSON.stringify(tokens)}` : '',
+      fid ? `GOOGLE_DRIVE_FOLDER_ID=${fid}` : ''
+    ].filter(Boolean).join('\n');
+
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(lines);
+      setCopiedVercelEnv(true);
+      setTimeout(() => setCopiedVercelEnv(false), 2500);
+    }
+  };
+
   // Start Google OAuth 2.0 Authorization Flow
   const handleStartGoogleOAuth = async (e) => {
     e.preventDefault();
@@ -116,6 +168,12 @@ export default function AdminSettingsPage() {
       setError('Both Google OAuth Client ID and Client Secret are required.');
       return;
     }
+
+    try {
+      localStorage.setItem('myapps_drive_client_id', clientIdInput.trim());
+      localStorage.setItem('myapps_drive_client_secret', clientSecretInput.trim());
+      localStorage.setItem('myapps_drive_folder_id', folderIdInput.trim());
+    } catch {}
 
     setConnectingOAuth(true);
     try {
@@ -368,6 +426,30 @@ export default function AdminSettingsPage() {
                 <Check className="w-3.5 h-3.5" /> 
                 Direct browser upload active — files stream straight to your Google Drive, bypassing Vercel limits!
               </span>
+            </div>
+
+            {/* Permanent Vercel Server Storage */}
+            <div className="mt-3 p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-base">☁️</span>
+                  <span className="font-bold text-white text-xs">Permanent Vercel Server Storage</span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] bg-indigo-500/20 text-indigo-300 font-semibold border border-indigo-500/30">
+                    Zero-Maintenance
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCopyVercelEnv}
+                  className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-semibold flex items-center gap-1.5 transition-colors shadow-sm"
+                >
+                  <Copy className="w-3 h-3" />
+                  <span>{copiedVercelEnv ? 'Copied to Clipboard!' : 'Copy Vercel Env'}</span>
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Your browser currently preserves these credentials automatically in local storage so you stay connected on this device. To keep Google Drive connected across all devices and browsers without ever having to reconnect, copy and paste these into your <strong>Vercel Dashboard &rarr; Settings &rarr; Environment Variables</strong>.
+              </p>
             </div>
           </div>
         )}
