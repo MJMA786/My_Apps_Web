@@ -29,7 +29,14 @@
     },
     {
       "source": "/(.*)",
-      "destination": { "service": "client", "path": "/index.html" }
+      "destination": { "service": "client" },
+      "transforms": [
+        {
+          "type": "request.path",
+          "op": "set",
+          "args": "/index.html"
+        }
+      ]
     }
   ]
 }
