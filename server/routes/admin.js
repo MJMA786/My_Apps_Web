@@ -33,7 +33,94 @@ router.get('/drive/callback', async (req, res) => {
     const redirectUri = `${proto}://${host}/api/admin/drive/callback`;
 
     await handleOAuthCallback({ code, redirectUri });
-    res.redirect('/admin/settings?drive_connected=true');
+    
+    // Return friendly HTML confirmation page that smoothly transitions to admin settings
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Google Drive Connected - MyApps</title>
+  <style>
+    body {
+      background-color: #030712;
+      color: #f3f4f6;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 1rem;
+      box-sizing: border-box;
+    }
+    .card {
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 1.25rem;
+      padding: 2.5rem 2rem;
+      max-width: 440px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 64px;
+      height: 64px;
+      background: rgba(16, 185, 129, 0.15);
+      border: 2px solid #10b981;
+      border-radius: 50%;
+      font-size: 2rem;
+      margin-bottom: 1.25rem;
+    }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #ffffff;
+      margin: 0 0 0.5rem 0;
+    }
+    p {
+      color: #94a3b8;
+      font-size: 0.95rem;
+      line-height: 1.5;
+      margin: 0 0 1.75rem 0;
+    }
+    .btn {
+      display: inline-block;
+      background: linear-gradient(135deg, #4f46e5, #3b82f6);
+      color: #ffffff;
+      font-weight: 600;
+      font-size: 0.95rem;
+      padding: 0.75rem 1.75rem;
+      border-radius: 0.75rem;
+      text-decoration: none;
+      box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(79, 70, 229, 0.4);
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">✓</div>
+    <h1>Google Drive Connected!</h1>
+    <p>Your personal Google account has been authorized. You can now upload and manage APKs with 15 GB storage.</p>
+    <a href="/admin/settings?drive_connected=true" class="btn" id="returnBtn">Continue to Settings &rarr;</a>
+  </div>
+  <script>
+    setTimeout(function() {
+      window.location.href = '/admin/settings?drive_connected=true';
+    }, 600);
+  </script>
+</body>
+</html>`);
   } catch (err) {
     console.error('Error in Google OAuth callback:', err);
     res.redirect('/admin/settings?error=' + encodeURIComponent(err.message));
