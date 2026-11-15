@@ -197,6 +197,11 @@ export default function AdminAppFormPage() {
       return;
     }
 
+    if (!isExternalLink && appFile && appFile.size > 4.5 * 1024 * 1024) {
+      setError(`File (${fileSize}) exceeds Vercel's direct upload limit of 4.5 MB. Please select "External Mirror URL" and paste your Google Drive link.`);
+      return;
+    }
+
     setError('');
     setSuccess('');
     setSubmitting(true);
@@ -518,6 +523,21 @@ export default function AdminAppFormPage() {
                   </p>
                 )}
               </div>
+
+              {appFile && appFile.size > 4.5 * 1024 * 1024 && (
+                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between gap-3">
+                  <span>
+                    ⚠️ <strong>{fileSize} package:</strong> Exceeds Vercel's 4.5 MB direct upload limit. Use <strong>External Mirror URL</strong> to paste your Google Drive link!
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsExternalLink(true)}
+                    className="px-2.5 py-1 rounded-lg bg-amber-500 text-slate-950 font-bold text-[11px] whitespace-nowrap hover:bg-amber-400"
+                  >
+                    Switch to Link
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <div className="space-y-3">

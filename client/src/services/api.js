@@ -3,6 +3,11 @@ const API_BASE = '/api';
 // Safe Response Parser to prevent "Unexpected token A in JSON"
 async function parseJsonResponse(res, defaultError = 'Request failed') {
   const text = await res.text();
+  
+  if (res.status === 413 || text.includes('Request Entity Too Large') || text.includes('Request En')) {
+    throw new Error("File is too large for Vercel's direct serverless upload (limit is 4.5 MB). Please select 'External Mirror URL' and paste your Google Drive link.");
+  }
+
   let data;
   try {
     data = JSON.parse(text);
