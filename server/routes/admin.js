@@ -38,6 +38,16 @@ function formatBytes(bytes, decimals = 1) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }
 
+function formatDirectDriveDownloadUrl(url) {
+  if (!url) return '';
+  const trimmed = url.trim();
+  const match = trimmed.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || trimmed.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (match && match[1]) {
+    return `https://drive.usercontent.google.com/download?id=${match[1]}&export=download`;
+  }
+  return trimmed;
+}
+
 // ==========================================
 // Google Drive Integration Status & Config
 // ==========================================
@@ -432,7 +442,7 @@ router.post('/apps', uploadAppAssets, async (req, res) => {
       fileName,
       calculatedSize,
       isExternal ? 1 : 0,
-      external_download_url ? external_download_url.trim() : '',
+      external_download_url ? formatDirectDriveDownloadUrl(external_download_url) : '',
       JSON.stringify(screenshotUrls),
       formattedFeatures,
       system_requirements.trim(),
@@ -670,7 +680,7 @@ router.put('/apps/:id', uploadAppAssets, async (req, res) => {
       fileName,
       calculatedSize,
       isExternal ? 1 : 0,
-      external_download_url !== undefined ? external_download_url.trim() : existing.external_download_url,
+      external_download_url !== undefined ? formatDirectDriveDownloadUrl(external_download_url) : existing.external_download_url,
       JSON.stringify(currentScreenshots),
       formattedFeatures,
       system_requirements !== undefined ? system_requirements.trim() : existing.system_requirements,

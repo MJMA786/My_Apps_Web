@@ -17,6 +17,16 @@ function formatApp(row) {
   };
 }
 
+// Helper to convert Google Drive share/view links into direct download links
+function formatDirectDriveDownloadUrl(url) {
+  if (!url) return url;
+  const match = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (match && match[1]) {
+    return `https://drive.usercontent.google.com/download?id=${match[1]}&export=download`;
+  }
+  return url;
+}
+
 // Get Featured Apps
 router.get('/featured', (req, res) => {
   try {
@@ -194,7 +204,8 @@ router.get('/:slug/download', (req, res) => {
 
     // Handle external URL download
     if (app.is_external_link && app.external_download_url) {
-      return res.redirect(app.external_download_url);
+      const downloadUrl = formatDirectDriveDownloadUrl(app.external_download_url);
+      return res.redirect(downloadUrl);
     }
 
     // Handle local file download
