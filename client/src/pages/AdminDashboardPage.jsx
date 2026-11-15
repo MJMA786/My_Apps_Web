@@ -40,7 +40,21 @@ export default function AdminDashboardPage() {
         api.getAdminApps({ search, status: statusFilter })
       ]);
       setStats(statsRes);
-      setApps(appsRes);
+
+      // Auto-recovery: If server returned empty apps on a cold start, restore from cached catalog
+      let finalApps = appsRes;
+      if ((!appsRes || appsRes.length === 0) && !search && (!statusFilter || statusFilter === 'all')) {
+        try {
+          const cached = JSON.parse(localStorage.getItem('myapps_catalog_cache') || '[]');
+          if (Array.isArray(cached) && cached.length > 0) {
+            console.log('[Admin] Cold start detected. Auto-restoring apps to server...', cached.length);
+            await api.syncCatalog(cached);
+            finalApps = cached;
+          }
+        } catch {}
+      }
+
+      setApps(finalApps);
     } catch (err) {
       console.error('Failed to load admin dashboard data:', err);
     } finally {

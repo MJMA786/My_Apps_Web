@@ -39,9 +39,19 @@ export default function HomePage() {
           api.getCategories(),
           api.getPlatforms()
         ]);
-        setFeaturedApps(featuredRes);
-        setCategories(catRes);
-        setPlatforms(platRes);
+        let finalFeatured = featuredRes;
+        if (!featuredRes || featuredRes.length === 0) {
+          try {
+            const cached = JSON.parse(localStorage.getItem('myapps_catalog_cache') || '[]');
+            if (cached.length > 0) {
+              const feat = cached.filter(a => a.is_featured);
+              finalFeatured = feat.length > 0 ? feat : cached.slice(0, 6);
+            }
+          } catch {}
+        }
+        setFeaturedApps(finalFeatured || []);
+        setCategories(catRes || []);
+        setPlatforms(platRes || []);
       } catch (err) {
         console.error('Failed to load initial data:', err);
       }
@@ -61,7 +71,14 @@ export default function HomePage() {
           sort: sortBy,
           limit: 24
         });
-        setApps(data.apps || []);
+        let appList = data.apps || [];
+        if (appList.length === 0 && !search && selectedCategory === 'All' && selectedPlatform === 'All') {
+          try {
+            const cached = JSON.parse(localStorage.getItem('myapps_catalog_cache') || '[]');
+            if (cached.length > 0) appList = cached;
+          } catch {}
+        }
+        setApps(appList);
       } catch (err) {
         console.error('Failed to query apps:', err);
       } finally {

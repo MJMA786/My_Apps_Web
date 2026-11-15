@@ -1,7 +1,17 @@
 import express from 'express';
 import path from 'node:path';
 import fs from 'node:fs';
-import { db, uploadsDir, iconsDir, screenshotsDir, filesDir } from '../db.js';
+import { 
+  db, 
+  uploadsDir, 
+  iconsDir, 
+  screenshotsDir, 
+  filesDir, 
+  getAllAppsFromDb, 
+  restoreAppsToDb, 
+  saveCatalogSnapshot, 
+  loadCatalogSnapshot 
+} from '../db.js';
 import { authenticateAdmin } from '../middleware/auth.js';
 import { uploadAppAssets } from '../middleware/upload.js';
 import { 
@@ -16,8 +26,11 @@ import {
   handleOAuthCallback,
   disconnectOAuth,
   saveOAuthConfig,
-  syncDriveAuth
+  syncDriveAuth,
+  saveCatalogToGoogleDrive,
+  fetchCatalogFromGoogleDrive
 } from '../services/googleDrive.js';
+import { ensureAppsLoaded } from './apps.js';
 
 const router = express.Router();
 
@@ -369,8 +382,9 @@ router.get('/stats', (req, res) => {
 });
 
 // Admin List All Apps (Includes drafts)
-router.get('/apps', (req, res) => {
+router.get('/apps', async (req, res) => {
   try {
+    await ensureAppsLoaded();
     const { search = '', status = '', category = '', platform = '' } = req.query;
     const conditions = [];
     const params = [];
@@ -637,6 +651,15 @@ router.post('/apps', uploadAppAssets, async (req, res) => {
 
     const createdApp = db.prepare('SELECT * FROM apps WHERE id = ?').get(result.lastInsertRowid);
 
+    // Persist catalog to local snapshot and Google Drive cloud storage
+    try {
+      const allApps = getAllAppsFromDb();
+      saveCatalogSnapshot(allApps);
+      saveCatalogToGoogleDrive(allApps).catch(err => {
+        console.warn('[GoogleDrive] Catalog sync error:', err.message);
+      });
+    } catch {}
+
     res.status(201).json({
       success: true,
       message: 'App created successfully' + (driveFileId ? ' (Uploaded to Google Drive)' : ''),
@@ -876,6 +899,15 @@ router.put('/apps/:id', uploadAppAssets, async (req, res) => {
 
     const updatedApp = db.prepare('SELECT * FROM apps WHERE id = ?').get(id);
 
+    // Persist catalog to local snapshot and Google Drive cloud storage
+    try {
+      const allApps = getAllAppsFromDb();
+      saveCatalogSnapshot(allApps);
+      saveCatalogToGoogleDrive(allApps).catch(err => {
+        console.warn('[GoogleDrive] Catalog sync error:', err.message);
+      });
+    } catch {}
+
     res.json({
       success: true,
       message: 'App updated successfully',
@@ -937,6 +969,15 @@ router.delete('/apps/:id', async (req, res) => {
 
     db.prepare('DELETE FROM apps WHERE id = ?').run(id);
 
+    // Persist catalog to local snapshot and Google Drive cloud storage
+    try {
+      const allApps = getAllAppsFromDb();
+      saveCatalogSnapshot(allApps);
+      saveCatalogToGoogleDrive(allApps).catch(err => {
+        console.warn('[GoogleDrive] Catalog sync error:', err.message);
+      });
+    } catch {}
+
     res.json({
       success: true,
       message: `App "${app.title}" and its Google Drive cloud storage files have been deleted successfully.`
@@ -959,9 +1000,83 @@ router.patch('/apps/:id/featured', (req, res) => {
     const newFeatured = app.is_featured ? 0 : 1;
     db.prepare('UPDATE apps SET is_featured = ? WHERE id = ?').run(newFeatured, id);
 
+    // Persist catalog
+    try {
+      const allApps = getAllAppsFromDb();
+      saveCatalogSnapshot(allApps);
+      saveCatalogToGoogleDrive(allApps).catch(() => {});
+    } catch {}
+
     res.json({ success: true, is_featured: Boolean(newFeatured) });
   } catch (err) {
     res.status(500).json({ error: 'Failed to update featured status' });
+  }
+});
+
+// Sync Full Catalog from Client / LocalStorage Backup
+router.post('/apps/sync-catalog', (req, res) => {
+  try {
+    const { apps } = req.body;
+    if (Array.isArray(apps) && apps.length > 0) {
+      restoreAppsToDb(apps);
+      const allApps = getAllAppsFromDb();
+      saveCatalogSnapshot(allApps);
+      saveCatalogToGoogleDrive(allApps).catch(() => {});
+      return res.json({ success: true, message: `Restored ${allApps.length} apps.`, count: allApps.length });
+    }
+    res.json({ success: true, count: getAllAppsFromDb().length });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to sync catalog: ' + err.message });
+  }
+});
+
+// Manually Backup Catalog to Google Drive
+router.post('/apps/backup-drive', async (req, res) => {
+  try {
+    const allApps = getAllAppsFromDb();
+    saveCatalogSnapshot(allApps);
+    const fileId = await saveCatalogToGoogleDrive(allApps);
+    res.json({
+      success: true,
+      message: `Successfully backed up ${allApps.length} apps to Google Drive.`,
+      fileId,
+      count: allApps.length
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to backup catalog to Drive: ' + err.message });
+  }
+});
+
+// Manually Restore Catalog from Google Drive
+router.post('/apps/restore-drive', async (req, res) => {
+  try {
+    const driveApps = await fetchCatalogFromGoogleDrive();
+    if (!driveApps || !Array.isArray(driveApps) || driveApps.length === 0) {
+      return res.status(404).json({ error: 'No catalog backup found on Google Drive.' });
+    }
+
+    restoreAppsToDb(driveApps);
+    saveCatalogSnapshot(driveApps);
+    res.json({
+      success: true,
+      message: `Successfully restored ${driveApps.length} apps from Google Drive cloud backup.`,
+      count: driveApps.length,
+      apps: driveApps
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to restore catalog from Drive: ' + err.message });
+  }
+});
+
+// Export Catalog as JSON
+router.get('/apps/export', (req, res) => {
+  try {
+    const allApps = getAllAppsFromDb();
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', 'attachment; filename="myapps_catalog_export.json"');
+    res.send(JSON.stringify(allApps, null, 2));
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to export catalog: ' + err.message });
   }
 });
 

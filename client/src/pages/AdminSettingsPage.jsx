@@ -20,7 +20,9 @@ import {
   Folder,
   Copy,
   LogOut,
-  Sparkles
+  Sparkles,
+  Download,
+  Upload
 } from 'lucide-react';
 
 export default function AdminSettingsPage() {
@@ -254,6 +256,56 @@ export default function AdminSettingsPage() {
     } finally {
       setTestingDrive(false);
     }
+  };
+
+  // Catalog Cloud Persistence states & handlers
+  const [backingUpCatalog, setBackingUpCatalog] = useState(false);
+  const [restoringCatalog, setRestoringCatalog] = useState(false);
+
+  const handleBackupCatalogToDrive = async () => {
+    setBackingUpCatalog(true);
+    setError('');
+    setSuccess('');
+    try {
+      const res = await api.backupCatalogToDrive();
+      setSuccess(`Backed up ${res.count} apps to Google Drive (myapps_catalog.json)!`);
+    } catch (err) {
+      setError(err.message || 'Failed to backup catalog to Google Drive.');
+    } finally {
+      setBackingUpCatalog(false);
+    }
+  };
+
+  const handleRestoreCatalogFromDrive = async () => {
+    if (!window.confirm('Restore apps catalog from Google Drive? This will restore any apps saved in your cloud backup.')) return;
+    setRestoringCatalog(true);
+    setError('');
+    setSuccess('');
+    try {
+      const res = await api.restoreCatalogFromDrive();
+      setSuccess(`Restored ${res.count} apps from Google Drive cloud backup!`);
+    } catch (err) {
+      setError(err.message || 'Failed to restore catalog from Google Drive.');
+    } finally {
+      setRestoringCatalog(false);
+    }
+  };
+
+  const handleImportCatalogJson = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const apps = JSON.parse(event.target.result);
+        if (!Array.isArray(apps)) throw new Error('JSON file must contain an array of apps');
+        await api.syncCatalog(apps);
+        setSuccess(`Successfully imported and restored ${apps.length} apps!`);
+      } catch (err) {
+        setError('Failed to import JSON: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
   };
 
   // Update Admin Profile / Password
@@ -703,7 +755,83 @@ export default function AdminSettingsPage() {
         )}
       </div>
 
-      {/* SECTION 2: Admin Profile & Credentials */}
+      {/* SECTION 2: Apps Catalog Cloud Persistence & Backup */}
+      <div className="rounded-3xl bg-slate-900/80 border border-slate-800 p-6 sm:p-8 space-y-5 shadow-xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+              <Database className="w-6 h-6" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <span>Apps Catalog Cloud Sync & Persistence</span>
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                  Zero Data Loss
+                </span>
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Automatically saves your entire app listings to <code className="text-indigo-300 font-mono">myapps_catalog.json</code> on Google Drive and restores them during serverless cold starts.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleBackupCatalogToDrive}
+              disabled={backingUpCatalog}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium transition-colors shadow-sm"
+              title="Force sync current database to Google Drive"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${backingUpCatalog ? 'animate-spin' : ''}`} />
+              <span>{backingUpCatalog ? 'Backing up...' : 'Sync to Drive'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleRestoreCatalogFromDrive}
+              disabled={restoringCatalog}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium transition-colors"
+              title="Pull catalog from Google Drive"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>{restoringCatalog ? 'Restoring...' : 'Restore from Drive'}</span>
+            </button>
+            <a
+              href="/api/admin/apps/export"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium transition-colors"
+              title="Download full catalog as JSON file"
+            >
+              <Download className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Export JSON</span>
+            </a>
+            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium transition-colors cursor-pointer">
+              <Upload className="w-3.5 h-3.5 text-amber-400" />
+              <span>Import JSON</span>
+              <input
+                type="file"
+                accept=".json"
+                onChange={handleImportCatalogJson}
+                className="hidden"
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-[11px] text-slate-400 space-y-1.5">
+          <p className="flex items-center gap-2 text-emerald-400 font-medium">
+            <Check className="w-3.5 h-3.5 flex-shrink-0" />
+            Every time you publish, edit, or delete an app, the catalog is automatically mirrored to Google Drive.
+          </p>
+          <p className="flex items-center gap-2 text-slate-400">
+            <HardDrive className="w-3.5 h-3.5 flex-shrink-0 text-indigo-400" />
+            Your browser also stores a local cache so the admin dashboard and home page never appear empty after server inactivity.
+          </p>
+        </div>
+      </div>
+
+      {/* SECTION 3: Admin Profile & Credentials */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
         <div className="md:col-span-2 space-y-6">
           <form onSubmit={handleUpdateProfile} className="rounded-3xl bg-slate-900/70 border border-slate-800 p-6 sm:p-8 space-y-5 text-xs">

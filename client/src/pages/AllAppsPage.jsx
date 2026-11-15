@@ -37,8 +37,15 @@ export default function AllAppsPage() {
           sort,
           limit: 36
         });
-        setApps(data.apps || []);
-        setTotal(data.pagination ? data.pagination.total : (data.apps?.length || 0));
+        let appList = data.apps || [];
+        if (appList.length === 0 && !search && category === 'All' && platform === 'All') {
+          try {
+            const cached = JSON.parse(localStorage.getItem('myapps_catalog_cache') || '[]');
+            if (cached.length > 0) appList = cached;
+          } catch {}
+        }
+        setApps(appList);
+        setTotal(data.pagination ? data.pagination.total : appList.length);
       } catch (err) {
         console.error('Failed to load apps:', err);
       } finally {

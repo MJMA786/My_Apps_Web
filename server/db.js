@@ -119,9 +119,144 @@ function initDatabase() {
     `).run(defaultUser, hash, 'Main Administrator', 'admin');
     console.log(`[DB] Admin account verified: "${defaultUser}"`);
   }
+
+  // Restore apps from local disk snapshot if available and database is empty
+  try {
+    const appCountRow = db.prepare('SELECT count(*) as count FROM apps').get();
+    if (!appCountRow || appCountRow.count === 0) {
+      const snapshot = loadCatalogSnapshot();
+      if (snapshot && Array.isArray(snapshot) && snapshot.length > 0) {
+        restoreAppsToDb(snapshot);
+        console.log(`[DB] Restored ${snapshot.length} apps from local catalog snapshot.`);
+      }
+    }
+  } catch (err) {
+    console.warn('[DB] Could not check snapshot on init:', err.message);
+  }
 }
 
 initDatabase();
+
+export function getAllAppsFromDb() {
+  try {
+    return db.prepare('SELECT * FROM apps ORDER BY id ASC').all();
+  } catch (e) {
+    console.error('[DB] Error getting all apps:', e.message);
+    return [];
+  }
+}
+
+export function restoreAppsToDb(appsList) {
+  if (!Array.isArray(appsList) || appsList.length === 0) return false;
+
+  const insertStmt = db.prepare(`
+    INSERT INTO apps (
+      title, slug, tagline, description, category, platform, version, developer,
+      website_url, icon_url, file_url, file_name, file_size, is_external_link,
+      external_download_url, screenshots, features, system_requirements, changelog,
+      is_featured, status, download_count, rating, drive_file_id, drive_icon_id,
+      drive_screenshot_ids, created_at, updated_at
+    ) VALUES (
+      ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?,
+      ?, COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP)
+    )
+    ON CONFLICT(slug) DO UPDATE SET
+      title = excluded.title,
+      tagline = excluded.tagline,
+      description = excluded.description,
+      category = excluded.category,
+      platform = excluded.platform,
+      version = excluded.version,
+      developer = excluded.developer,
+      website_url = excluded.website_url,
+      icon_url = excluded.icon_url,
+      file_url = excluded.file_url,
+      file_name = excluded.file_name,
+      file_size = excluded.file_size,
+      is_external_link = excluded.is_external_link,
+      external_download_url = excluded.external_download_url,
+      screenshots = excluded.screenshots,
+      features = excluded.features,
+      system_requirements = excluded.system_requirements,
+      changelog = excluded.changelog,
+      is_featured = excluded.is_featured,
+      status = excluded.status,
+      download_count = excluded.download_count,
+      rating = excluded.rating,
+      drive_file_id = excluded.drive_file_id,
+      drive_icon_id = excluded.drive_icon_id,
+      drive_screenshot_ids = excluded.drive_screenshot_ids,
+      updated_at = CURRENT_TIMESTAMP
+  `);
+
+  for (const app of appsList) {
+    try {
+      insertStmt.run(
+        app.title || 'Untitled App',
+        app.slug,
+        app.tagline || '',
+        app.description || '',
+        app.category || 'Utilities',
+        app.platform || 'Windows',
+        app.version || '1.0.0',
+        app.developer || 'Admin Developer',
+        app.website_url || '',
+        app.icon_url || '',
+        app.file_url || '',
+        app.file_name || '',
+        app.file_size || '',
+        app.is_external_link ? 1 : 0,
+        app.external_download_url || '',
+        typeof app.screenshots === 'string' ? app.screenshots : JSON.stringify(app.screenshots || []),
+        typeof app.features === 'string' ? app.features : JSON.stringify(app.features || []),
+        app.system_requirements || '',
+        app.changelog || '',
+        app.is_featured ? 1 : 0,
+        app.status || 'published',
+        app.download_count || 0,
+        app.rating || 4.9,
+        app.drive_file_id || null,
+        app.drive_icon_id || null,
+        typeof app.drive_screenshot_ids === 'string' ? app.drive_screenshot_ids : JSON.stringify(app.drive_screenshot_ids || []),
+        app.created_at || null,
+        app.updated_at || null
+      );
+    } catch (e) {
+      console.warn('[DB] Could not restore app:', app.slug, e.message);
+    }
+  }
+  return true;
+}
+
+export function saveCatalogSnapshot(appsList) {
+  try {
+    const catalogPath = path.join(dataDir, 'catalog.json');
+    fs.writeFileSync(catalogPath, JSON.stringify(appsList, null, 2), 'utf8');
+    return true;
+  } catch (e) {
+    console.warn('[DB] Could not save catalog snapshot:', e.message);
+    return false;
+  }
+}
+
+export function loadCatalogSnapshot() {
+  try {
+    const catalogPath = path.join(dataDir, 'catalog.json');
+    if (fs.existsSync(catalogPath)) {
+      return JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
+    }
+    const fallbackPath = path.join(__dirname, 'data', 'catalog.json');
+    if (fs.existsSync(fallbackPath)) {
+      return JSON.parse(fs.readFileSync(fallbackPath, 'utf8'));
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 export function getSetting(key, defaultValue = null) {
   try {

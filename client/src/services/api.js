@@ -59,7 +59,13 @@ export const api = {
 
     const res = await fetch(`${API_BASE}/apps?${query.toString()}`);
     if (!res.ok) throw new Error('Failed to fetch apps');
-    return res.json();
+    const data = await res.json();
+    if (data.apps && Array.isArray(data.apps) && data.apps.length > 0) {
+      try {
+        localStorage.setItem('myapps_catalog_cache', JSON.stringify(data.apps));
+      } catch {}
+    }
+    return data;
   },
 
   async getAppBySlug(slug) {
@@ -131,7 +137,13 @@ export const api = {
       headers: getAuthHeaders()
     });
     if (!res.ok) throw new Error('Failed to fetch admin apps');
-    return res.json();
+    const data = await res.json();
+    if (Array.isArray(data) && data.length > 0) {
+      try {
+        localStorage.setItem('myapps_catalog_cache', JSON.stringify(data));
+      } catch {}
+    }
+    return data;
   },
 
   async getAdminAppById(id) {
@@ -345,5 +357,37 @@ export const api = {
       headers: getAuthHeaders()
     });
     return parseJsonResponse(res, 'Failed to disconnect Google Account');
+  },
+
+  // Apps Catalog Persistence & Backup APIs
+  async syncCatalog(apps) {
+    const res = await fetch(`${API_BASE}/admin/apps/sync-catalog`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ apps })
+    });
+    return parseJsonResponse(res, 'Failed to sync catalog');
+  },
+
+  async backupCatalogToDrive() {
+    const res = await fetch(`${API_BASE}/admin/apps/backup-drive`, {
+      method: 'POST',
+      headers: getAuthHeaders()
+    });
+    return parseJsonResponse(res, 'Failed to backup catalog to Google Drive');
+  },
+
+  async restoreCatalogFromDrive() {
+    const res = await fetch(`${API_BASE}/admin/apps/restore-drive`, {
+      method: 'POST',
+      headers: getAuthHeaders()
+    });
+    const data = await parseJsonResponse(res, 'Failed to restore catalog from Google Drive');
+    if (data.apps && Array.isArray(data.apps) && data.apps.length > 0) {
+      try {
+        localStorage.setItem('myapps_catalog_cache', JSON.stringify(data.apps));
+      } catch {}
+    }
+    return data;
   }
 };

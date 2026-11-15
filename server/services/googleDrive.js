@@ -546,3 +546,139 @@ export function saveDriveCredentials(keyJsonString, folderId) {
     folderId: extractFolderId(folderId) || null
   };
 }
+
+// Save entire apps catalog to Google Drive as myapps_catalog.json (Zero-loss cloud sync)
+export async function saveCatalogToGoogleDrive(appsList) {
+  try {
+    const authInfo = getDriveAuth();
+    if (!authInfo) return null;
+
+    const drive = google.drive({ version: 'v3', auth: authInfo.auth });
+    const folderId = getDriveFolderId();
+    const content = JSON.stringify(appsList, null, 2);
+
+    // Check if myapps_catalog.json already exists in Drive
+    let fileId = getSetting('google_drive_catalog_file_id');
+    if (fileId) {
+      try {
+        await drive.files.get({ fileId, fields: 'id, trashed', supportsAllDrives: true });
+      } catch {
+        fileId = null;
+      }
+    }
+
+    if (!fileId) {
+      let query = "name = 'myapps_catalog.json' and trashed = false";
+      if (folderId) {
+        query += ` and '${folderId}' in parents`;
+      }
+      try {
+        const searchRes = await drive.files.list({
+          q: query,
+          fields: 'files(id, name)',
+          spaces: 'drive',
+          supportsAllDrives: true,
+          includeItemsFromAllDrives: true
+        });
+        if (searchRes.data.files && searchRes.data.files.length > 0) {
+          fileId = searchRes.data.files[0].id;
+          setSetting('google_drive_catalog_file_id', fileId);
+        }
+      } catch (listErr) {
+        console.warn('[GoogleDrive] Could not list files for catalog search:', listErr.message);
+      }
+    }
+
+    const { Readable } = await import('node:stream');
+    const mediaStream = Readable.from([content]);
+
+    if (fileId) {
+      // Update existing file
+      await drive.files.update({
+        fileId,
+        media: {
+          mimeType: 'application/json',
+          body: mediaStream
+        },
+        supportsAllDrives: true
+      });
+      console.log(`[GoogleDrive] Updated catalog backup (${appsList.length} apps) on Google Drive.`);
+      return fileId;
+    } else {
+      // Create new file
+      const fileMetadata = {
+        name: 'myapps_catalog.json',
+        mimeType: 'application/json'
+      };
+      if (folderId) {
+        fileMetadata.parents = [folderId];
+      }
+      const createRes = await drive.files.create({
+        requestBody: fileMetadata,
+        media: {
+          mimeType: 'application/json',
+          body: mediaStream
+        },
+        fields: 'id',
+        supportsAllDrives: true
+      });
+      fileId = createRes.data.id;
+      setSetting('google_drive_catalog_file_id', fileId);
+      console.log(`[GoogleDrive] Created new catalog backup (${appsList.length} apps) on Google Drive: ${fileId}`);
+      return fileId;
+    }
+  } catch (err) {
+    console.warn('[GoogleDrive] Error saving catalog to Google Drive:', err.message);
+    return null;
+  }
+}
+
+// Fetch apps catalog from Google Drive
+export async function fetchCatalogFromGoogleDrive() {
+  try {
+    const authInfo = getDriveAuth();
+    if (!authInfo) return null;
+
+    const drive = google.drive({ version: 'v3', auth: authInfo.auth });
+    const folderId = getDriveFolderId();
+
+    let fileId = getSetting('google_drive_catalog_file_id');
+    if (!fileId) {
+      let query = "name = 'myapps_catalog.json' and trashed = false";
+      if (folderId) {
+        query += ` and '${folderId}' in parents`;
+      }
+      try {
+        const searchRes = await drive.files.list({
+          q: query,
+          fields: 'files(id, name)',
+          spaces: 'drive',
+          supportsAllDrives: true,
+          includeItemsFromAllDrives: true
+        });
+        if (searchRes.data.files && searchRes.data.files.length > 0) {
+          fileId = searchRes.data.files[0].id;
+          setSetting('google_drive_catalog_file_id', fileId);
+        }
+      } catch (listErr) {
+        console.warn('[GoogleDrive] Could not list files for catalog read:', listErr.message);
+      }
+    }
+
+    if (!fileId) return null;
+
+    const fileRes = await drive.files.get(
+      { fileId, alt: 'media', supportsAllDrives: true },
+      { responseType: 'text' }
+    );
+
+    const apps = typeof fileRes.data === 'string' ? JSON.parse(fileRes.data) : fileRes.data;
+    if (Array.isArray(apps)) {
+      return apps;
+    }
+    return null;
+  } catch (err) {
+    console.warn('[GoogleDrive] Error fetching catalog from Google Drive:', err.message);
+    return null;
+  }
+}

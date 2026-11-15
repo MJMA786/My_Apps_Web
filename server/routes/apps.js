@@ -1,9 +1,36 @@
 import express from 'express';
 import path from 'node:path';
 import fs from 'node:fs';
-import { db, filesDir } from '../db.js';
+import { db, filesDir, loadCatalogSnapshot, restoreAppsToDb, saveCatalogSnapshot } from '../db.js';
+import { fetchCatalogFromGoogleDrive } from '../services/googleDrive.js';
 
 const router = express.Router();
+
+// Ensure apps are loaded into SQLite /tmp on serverless cold starts
+export async function ensureAppsLoaded() {
+  try {
+    const row = db.prepare('SELECT count(*) as count FROM apps').get();
+    if (row && row.count > 0) return;
+
+    // 1. Try local snapshot
+    const snapshot = loadCatalogSnapshot();
+    if (snapshot && Array.isArray(snapshot) && snapshot.length > 0) {
+      restoreAppsToDb(snapshot);
+      console.log(`[Apps] Restored ${snapshot.length} apps from local disk snapshot.`);
+      return;
+    }
+
+    // 2. Try Google Drive cloud catalog
+    const driveApps = await fetchCatalogFromGoogleDrive();
+    if (driveApps && Array.isArray(driveApps) && driveApps.length > 0) {
+      restoreAppsToDb(driveApps);
+      saveCatalogSnapshot(driveApps);
+      console.log(`[Apps] Restored ${driveApps.length} apps from Google Drive cloud backup!`);
+    }
+  } catch (err) {
+    console.warn('[Apps] Could not ensure apps loaded:', err.message);
+  }
+}
 
 // Helper to format app record
 function formatApp(row) {
@@ -28,8 +55,9 @@ function formatDirectDriveDownloadUrl(url) {
 }
 
 // Get Featured Apps
-router.get('/featured', (req, res) => {
+router.get('/featured', async (req, res) => {
   try {
+    await ensureAppsLoaded();
     const rows = db.prepare(`
       SELECT * FROM apps
       WHERE is_featured = 1 AND status = 'published'
@@ -44,8 +72,9 @@ router.get('/featured', (req, res) => {
 });
 
 // Get Categories with Counts
-router.get('/categories', (req, res) => {
+router.get('/categories', async (req, res) => {
   try {
+    await ensureAppsLoaded();
     const rows = db.prepare(`
       SELECT category as name, COUNT(*) as count
       FROM apps
@@ -61,8 +90,9 @@ router.get('/categories', (req, res) => {
 });
 
 // Get Platforms with Counts
-router.get('/platforms', (req, res) => {
+router.get('/platforms', async (req, res) => {
   try {
+    await ensureAppsLoaded();
     const rows = db.prepare(`
       SELECT platform as name, COUNT(*) as count
       FROM apps
@@ -78,8 +108,9 @@ router.get('/platforms', (req, res) => {
 });
 
 // List Apps (Filtered, Searched, Paginated)
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
+    await ensureAppsLoaded();
     const {
       search = '',
       category = '',
@@ -146,8 +177,9 @@ router.get('/', (req, res) => {
 });
 
 // Get Single App Details by Slug or ID
-router.get('/:slug', (req, res) => {
+router.get('/:slug', async (req, res) => {
   try {
+    await ensureAppsLoaded();
     const { slug } = req.params;
     let app = db.prepare('SELECT * FROM apps WHERE slug = ?').get(slug);
 
@@ -178,8 +210,9 @@ router.get('/:slug', (req, res) => {
 });
 
 // Download App Route (Increments download counter and serves file)
-router.get('/:slug/download', (req, res) => {
+router.get('/:slug/download', async (req, res) => {
   try {
+    await ensureAppsLoaded();
     const { slug } = req.params;
     let app = db.prepare('SELECT * FROM apps WHERE slug = ?').get(slug);
 
