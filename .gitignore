@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Builds
+dist/
+build/
+.vercel
+
+# Storage & Uploads (Keys, Google Drive credentials, and binary files)
+Storage/
+storage/
+server/uploads/
+server/data/
+uploads/
+
+# Sensitive Keys & Credentials
+*.env
+*.env.*
+*.json.key
+*key*.json
+*credentials*.json
+*service_account*.json
+google-drive-key.json
+
+# Databases & logs
+*.db
+*.db-journal
+*.sqlite
+*.log
+Thumbs.db
+.DS_Store
+
+# Large application binary installers
+*.apk
+*.exe
+*.msi
+*.zip
+*.dmg
+*.tar.gz
