@@ -1,5 +1,20 @@
 const API_BASE = '/api';
 
+// Safe Response Parser to prevent "Unexpected token A in JSON"
+async function parseJsonResponse(res, defaultError = 'Request failed') {
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(text || `${defaultError} (${res.status})`);
+  }
+  if (!res.ok) {
+    throw new Error(data.error || data.message || `${defaultError} (${res.status})`);
+  }
+  return data;
+}
+
 // Helper for authorized headers
 function getAuthHeaders(isFormData = false) {
   const token = localStorage.getItem('myapps_token');
@@ -64,9 +79,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Login failed');
-    return data;
+    return parseJsonResponse(res, 'Login failed');
   },
 
   async getMe() {
@@ -83,9 +96,7 @@ export const api = {
       headers: getAuthHeaders(),
       body: JSON.stringify(profileData)
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to update profile');
-    return data;
+    return parseJsonResponse(res, 'Failed to update profile');
   },
 
   // Admin APIs

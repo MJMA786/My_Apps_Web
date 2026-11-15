@@ -6,7 +6,10 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const keyFilePath = path.join(__dirname, '..', 'data', 'google-drive-key.json');
+const isVercel = Boolean(process.env.VERCEL);
+const keyFilePath = isVercel
+  ? path.join('/tmp', 'google-drive-key.json')
+  : path.join(__dirname, '..', 'data', 'google-drive-key.json');
 
 // Helper to get Google Drive auth client
 export function getDriveAuth() {
@@ -192,14 +195,18 @@ export function saveDriveCredentials(keyJsonString, folderId) {
   fs.writeFileSync(keyFilePath, JSON.stringify(parsed, null, 2), 'utf8');
 
   if (folderId !== undefined) {
-    const envPath = path.join(__dirname, '..', '.env');
-    let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
-    if (envContent.includes('GOOGLE_DRIVE_FOLDER_ID=')) {
-      envContent = envContent.replace(/GOOGLE_DRIVE_FOLDER_ID=.*(\r?\n|$)/, `GOOGLE_DRIVE_FOLDER_ID=${folderId.trim()}$1`);
-    } else {
-      envContent += `\nGOOGLE_DRIVE_FOLDER_ID=${folderId.trim()}\n`;
+    if (!isVercel) {
+      try {
+        const envPath = path.join(__dirname, '..', '.env');
+        let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+        if (envContent.includes('GOOGLE_DRIVE_FOLDER_ID=')) {
+          envContent = envContent.replace(/GOOGLE_DRIVE_FOLDER_ID=.*(\r?\n|$)/, `GOOGLE_DRIVE_FOLDER_ID=${folderId.trim()}$1`);
+        } else {
+          envContent += `\nGOOGLE_DRIVE_FOLDER_ID=${folderId.trim()}\n`;
+        }
+        fs.writeFileSync(envPath, envContent, 'utf8');
+      } catch {}
     }
-    fs.writeFileSync(envPath, envContent, 'utf8');
     process.env.GOOGLE_DRIVE_FOLDER_ID = folderId.trim();
   }
 

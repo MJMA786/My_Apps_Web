@@ -7,25 +7,34 @@ import bcrypt from 'bcryptjs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Ensure data and upload directories exist
-const dataDir = path.join(__dirname, 'data');
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-}
+const isVercel = Boolean(process.env.VERCEL);
+const baseDir = isVercel ? '/tmp' : __dirname;
 
-const uploadsDir = path.join(__dirname, 'uploads');
+// Ensure data and upload directories exist (using /tmp on serverless environments like Vercel)
+const dataDir = path.join(baseDir, 'data');
+const uploadsDir = path.join(baseDir, 'uploads');
 const iconsDir = path.join(uploadsDir, 'icons');
 const screenshotsDir = path.join(uploadsDir, 'screenshots');
 const filesDir = path.join(uploadsDir, 'files');
 
-[uploadsDir, iconsDir, screenshotsDir, filesDir].forEach(dir => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+[dataDir, uploadsDir, iconsDir, screenshotsDir, filesDir].forEach(dir => {
+  try {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  } catch (err) {
+    console.warn('[DB] Warning creating directory:', dir, err.message);
   }
 });
 
 const dbPath = path.join(dataDir, 'myapps.db');
-const db = new DatabaseSync(dbPath);
+let db;
+try {
+  db = new DatabaseSync(dbPath);
+} catch (dbErr) {
+  console.warn('[DB] Could not open database file on disk, falling back to memory:', dbErr.message);
+  db = new DatabaseSync(':memory:');
+}
 
 // Initialize Tables
 function initDatabase() {
