@@ -48,8 +48,15 @@ export default function AdminAppFormPage() {
   // File Upload states
   const [iconFile, setIconFile] = useState(null);
   const [iconPreview, setIconPreview] = useState('');
+  const [iconUrlInput, setIconUrlInput] = useState('');
   const [appFile, setAppFile] = useState(null);
   const [existingFileName, setExistingFileName] = useState('');
+
+  // Direct Google Drive Upload states (bypasses Vercel 4.5MB payload limit)
+  const [driveUploadProgress, setDriveUploadProgress] = useState(0);
+  const [driveUploadStatus, setDriveUploadStatus] = useState('idle'); // 'idle' | 'uploading' | 'completed' | 'error'
+  const [driveUploadedInfo, setDriveUploadedInfo] = useState(null);
+  const [driveUploadError, setDriveUploadError] = useState('');
   
   // Screenshots
   const [existingScreenshots, setExistingScreenshots] = useState([]);
@@ -142,12 +149,40 @@ export default function AdminAppFormPage() {
     const file = e.target.files[0];
     if (file) {
       setAppFile(file);
+      setDriveUploadStatus('idle');
+      setDriveUploadedInfo(null);
+      setDriveUploadError('');
       // Auto calculate friendly file size
       const bytes = file.size;
       const k = 1024;
       const sizes = ['Bytes', 'KB', 'MB', 'GB'];
       const i = Math.floor(Math.log(bytes) / Math.log(k));
       setFileSize((bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i]);
+    }
+  };
+
+  // Direct Browser-to-Google Drive Upload
+  const handleDirectDriveUpload = async () => {
+    if (!appFile) return;
+    setDriveUploadStatus('uploading');
+    setDriveUploadProgress(0);
+    setDriveUploadError('');
+
+    try {
+      const result = await api.uploadFileToDrive(appFile, (percent) => {
+        setDriveUploadProgress(percent);
+      });
+
+      setDriveUploadedInfo(result);
+      setDriveUploadStatus('completed');
+      setExternalDownloadUrl(result.directDownloadUrl);
+      if (result.name) {
+        setExistingFileName(result.name);
+      }
+    } catch (err) {
+      console.error('Direct Drive upload error:', err);
+      setDriveUploadStatus('error');
+      setDriveUploadError(err.message || 'Direct upload to Google Drive failed.');
     }
   };
 
@@ -197,16 +232,36 @@ export default function AdminAppFormPage() {
       return;
     }
 
-    if (!isExternalLink && appFile && appFile.size > 4.5 * 1024 * 1024) {
-      setError(`File (${fileSize}) exceeds Vercel's direct upload limit of 4.5 MB. Please select "External Mirror URL" and paste your Google Drive link.`);
-      return;
-    }
-
     setError('');
     setSuccess('');
     setSubmitting(true);
 
     try {
+      // 1. If an app file > 4.5MB was selected and not uploaded directly to Drive yet
+      let activeDriveInfo = driveUploadedInfo;
+      if (!isExternalLink && appFile && !activeDriveInfo && appFile.size > 4.5 * 1024 * 1024) {
+        if (driveConfigured) {
+          try {
+            setDriveUploadStatus('uploading');
+            setDriveUploadProgress(0);
+            activeDriveInfo = await api.uploadFileToDrive(appFile, (percent) => {
+              setDriveUploadProgress(percent);
+            });
+            setDriveUploadedInfo(activeDriveInfo);
+            setDriveUploadStatus('completed');
+          } catch (uploadErr) {
+            setDriveUploadStatus('error');
+            setDriveUploadError(uploadErr.message || 'Direct upload to Google Drive failed.');
+            setSubmitting(false);
+            return;
+          }
+        } else {
+          setError(`File (${fileSize}) exceeds Vercel's 4.5 MB limit. Please select "External Mirror URL" to paste your Google Drive link.`);
+          setSubmitting(false);
+          return;
+        }
+      }
+
       const formData = new FormData();
       formData.append('title', title.trim());
       formData.append('slug', slug.trim());
@@ -217,8 +272,8 @@ export default function AdminAppFormPage() {
       formData.append('version', version.trim());
       formData.append('developer', developer.trim());
       formData.append('website_url', websiteUrl.trim());
-      formData.append('is_external_link', isExternalLink ? '1' : '0');
-      formData.append('external_download_url', externalDownloadUrl.trim());
+      formData.append('is_external_link', (isExternalLink || activeDriveInfo) ? '1' : '0');
+      formData.append('external_download_url', activeDriveInfo ? activeDriveInfo.directDownloadUrl : externalDownloadUrl.trim());
       formData.append('file_size', fileSize.trim());
       formData.append('system_requirements', systemRequirements.trim());
       formData.append('changelog', changelog.trim());
@@ -229,13 +284,24 @@ export default function AdminAppFormPage() {
       const filteredFeatures = featuresList.map(f => f.trim()).filter(Boolean);
       formData.append('features', JSON.stringify(filteredFeatures));
 
-      // Append files
-      if (iconFile) {
-        formData.append('icon', iconFile);
-      }
-      if (appFile) {
+      // Append pre-uploaded Google Drive binary or local file
+      if (activeDriveInfo) {
+        formData.append('drive_file_id', activeDriveInfo.driveFileId);
+        formData.append('file_url', activeDriveInfo.directDownloadUrl);
+        formData.append('file_name', activeDriveInfo.name || (appFile ? appFile.name : ''));
+        // Do NOT append raw binary appFile to avoid Vercel 4.5MB limit!
+      } else if (appFile && !isExternalLink) {
         formData.append('file', appFile);
       }
+
+      // Append Icon
+      if (iconUrlInput.trim()) {
+        formData.append('icon_url', iconUrlInput.trim());
+      } else if (iconFile) {
+        formData.append('icon', iconFile);
+      }
+
+      // Append Screenshots
       if (screenshotFiles.length > 0) {
         screenshotFiles.forEach(file => {
           formData.append('screenshots', file);
@@ -503,39 +569,154 @@ export default function AdminAppFormPage() {
               <label className="block text-slate-300 font-medium">
                 Upload Application Package (.apk, .exe, .msi, .zip, .dmg, etc.)
               </label>
-              
-              <div className="border-2 border-dashed border-slate-800 hover:border-emerald-500/50 rounded-2xl p-6 text-center transition-colors bg-slate-950/40 relative">
-                <input
-                  type="file"
-                  onChange={handleFileChange}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                />
-                <Cloud className="w-10 h-10 text-emerald-400 mx-auto mb-2" />
-                <p className="text-slate-200 font-medium">
-                  {appFile ? appFile.name : (existingFileName ? `Current file: ${existingFileName}` : 'Choose or drop installer package to upload to Google Drive')}
-                </p>
-                <p className="text-slate-500 text-[11px] mt-1">
-                  Files are uploaded directly to your Google Drive and automatically deleted from Drive if removed.
-                </p>
-                {fileSize && (
-                  <p className="text-emerald-400 font-mono text-[11px] mt-2">
-                    Size: {fileSize}
-                  </p>
-                )}
-              </div>
 
-              {appFile && appFile.size > 4.5 * 1024 * 1024 && (
-                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between gap-3">
-                  <span>
-                    ⚠️ <strong>{fileSize} package:</strong> Exceeds Vercel's 4.5 MB direct upload limit. Use <strong>External Mirror URL</strong> to paste your Google Drive link!
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setIsExternalLink(true)}
-                    className="px-2.5 py-1 rounded-lg bg-amber-500 text-slate-950 font-bold text-[11px] whitespace-nowrap hover:bg-amber-400"
-                  >
-                    Switch to Link
-                  </button>
+              {/* State 1: Uploading directly to Google Drive */}
+              {driveUploadStatus === 'uploading' && (
+                <div className="p-6 rounded-2xl bg-indigo-950/40 border border-indigo-500/40 space-y-3">
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2 text-indigo-300 font-semibold">
+                      <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
+                      <span>Uploading directly from your browser to Google Drive...</span>
+                    </div>
+                    <span className="font-mono text-indigo-400 font-bold text-sm">{driveUploadProgress}%</span>
+                  </div>
+                  <div className="w-full h-2.5 rounded-full bg-slate-900 overflow-hidden">
+                    <div 
+                      className="h-full bg-gradient-to-r from-indigo-500 via-emerald-400 to-teal-300 transition-all duration-300"
+                      style={{ width: `${driveUploadProgress}%` }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1">
+                    <span>{appFile ? appFile.name : 'Package file'} ({fileSize})</span>
+                    <span className="text-emerald-400 font-medium">Bypassing Vercel 4.5MB serverless limits</span>
+                  </div>
+                </div>
+              )}
+
+              {/* State 2: Upload Completed */}
+              {driveUploadStatus === 'completed' && (
+                <div className="p-5 rounded-2xl bg-emerald-950/40 border border-emerald-500/40 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-emerald-300 font-bold text-sm">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                      <span>Uploaded to Google Drive successfully!</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDriveUploadStatus('idle');
+                        setDriveUploadedInfo(null);
+                        setAppFile(null);
+                      }}
+                      className="text-xs text-slate-400 hover:text-rose-400 underline transition-colors"
+                    >
+                      Change File
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-200 font-mono">
+                    {driveUploadedInfo?.name || appFile?.name} ({fileSize})
+                  </p>
+                  <p className="text-[11px] text-emerald-400/80">
+                    Direct Drive download link active. The file is hosted safely on your Google Drive.
+                  </p>
+                </div>
+              )}
+
+              {/* State 3: Upload Error */}
+              {driveUploadStatus === 'error' && (
+                <div className="p-4 rounded-2xl bg-rose-950/40 border border-rose-500/40 space-y-3">
+                  <div className="flex items-start gap-2.5 text-rose-300 text-xs">
+                    <AlertTriangle className="w-5 h-5 text-rose-400 flex-shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <p className="font-bold text-sm text-rose-200">Google Drive Upload Restriction</p>
+                      {driveUploadError.includes('GOOGLE_DRIVE_QUOTA_ERROR') || driveUploadError.includes('quota') ? (
+                        <p className="text-slate-300 leading-relaxed text-xs">
+                          Google prohibits service accounts from uploading directly to free <strong>@gmail.com</strong> personal folders (Google Workspace Shared Drive required for automated bot uploads).
+                          <br /><br />
+                          <strong>10-Second Solution:</strong> Click <strong>"Switch to External Mirror URL"</strong> below, upload your APK into your Google Drive folder, right-click ➔ Share ➔ Copy Link, and paste it here!
+                        </p>
+                      ) : (
+                        <p className="text-slate-300 text-xs">{driveUploadError}</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsExternalLink(true);
+                        setDriveUploadStatus('idle');
+                      }}
+                      className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-colors shadow-md"
+                    >
+                      Switch to External Mirror URL
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDirectDriveUpload}
+                      className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-colors"
+                    >
+                      Retry Upload
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* State 4: Idle */}
+              {driveUploadStatus === 'idle' && (
+                <div className="space-y-3">
+                  {!appFile ? (
+                    <div className="border-2 border-dashed border-slate-800 hover:border-emerald-500/50 rounded-2xl p-6 text-center transition-colors bg-slate-950/40 relative">
+                      <input
+                        type="file"
+                        onChange={handleFileChange}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                      />
+                      <Cloud className="w-10 h-10 text-emerald-400 mx-auto mb-2" />
+                      <p className="text-slate-200 font-medium">
+                        {existingFileName ? `Current file: ${existingFileName}` : 'Choose or drop installer package to upload to Google Drive'}
+                      </p>
+                      <p className="text-slate-500 text-[11px] mt-1">
+                        Direct upload streams from your browser to Google Drive — bypassing Vercel's 4.5MB limit.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-slate-200 text-sm">
+                          <FileBox className="w-5 h-5 text-emerald-400" />
+                          <span className="font-semibold truncate max-w-[280px]">{appFile.name}</span>
+                          <span className="text-xs text-emerald-400 font-mono">({fileSize})</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setAppFile(null)}
+                          className="text-slate-400 hover:text-rose-400 p-1 rounded-lg transition-colors"
+                          title="Clear selection"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="flex flex-col sm:flex-row items-center gap-2.5 pt-1">
+                        <button
+                          type="button"
+                          onClick={handleDirectDriveUpload}
+                          className="w-full sm:flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-indigo-600 hover:from-emerald-500 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-indigo-900/30 transition-all"
+                        >
+                          <Cloud className="w-4 h-4" />
+                          Upload Directly to Google Drive (Bypass Vercel Limit)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIsExternalLink(true)}
+                          className="px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 font-semibold text-xs border border-slate-800 transition-colors whitespace-nowrap"
+                        >
+                          Use Mirror Link Instead
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -590,20 +771,37 @@ export default function AdminAppFormPage() {
                 )}
               </div>
 
-              <div className="relative">
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleIconChange}
-                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                />
-                <button
-                  type="button"
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium transition-colors"
-                >
-                  Choose New Icon
-                </button>
-                <p className="text-[11px] text-slate-500 mt-1">Recommended: 512x512 PNG</p>
+              <div className="flex-1 space-y-2">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                  <div className="relative">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleIconChange}
+                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                    />
+                    <button
+                      type="button"
+                      className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs transition-colors whitespace-nowrap"
+                    >
+                      Choose Icon Image
+                    </button>
+                  </div>
+                  <span className="text-slate-500 text-xs font-medium hidden sm:inline">or</span>
+                  <input
+                    type="url"
+                    value={iconUrlInput}
+                    onChange={(e) => {
+                      setIconUrlInput(e.target.value);
+                      if (e.target.value.trim()) {
+                        setIconPreview(e.target.value.trim());
+                      }
+                    }}
+                    placeholder="Paste Icon Image URL (https://...)"
+                    className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white placeholder-slate-600 focus:border-indigo-500 outline-none"
+                  />
+                </div>
+                <p className="text-[11px] text-slate-500">Square PNG/SVG recommended, or direct image URL</p>
               </div>
             </div>
           </div>

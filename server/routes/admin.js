@@ -9,7 +9,9 @@ import {
   testDriveConnection, 
   uploadToGoogleDrive, 
   deleteFromGoogleDrive, 
-  saveDriveCredentials 
+  saveDriveCredentials,
+  createResumableUploadSession,
+  finishResumableUpload
 } from '../services/googleDrive.js';
 
 const router = express.Router();
@@ -79,6 +81,42 @@ router.post('/drive/config', async (req, res) => {
   } catch (err) {
     console.error('Error saving Drive config:', err);
     res.status(400).json({ error: 'Failed to configure Google Drive: ' + err.message });
+  }
+});
+
+// Initialize Direct Resumable Upload to Google Drive (Bypasses Vercel 4.5MB payload limit)
+router.post('/drive/init-upload', async (req, res) => {
+  try {
+    const { fileName, mimeType, fileSize } = req.body;
+    if (!fileName) {
+      return res.status(400).json({ error: 'fileName is required' });
+    }
+    const origin = req.headers.origin || process.env.CLIENT_URL || 'http://localhost:5173';
+    const result = await createResumableUploadSession({
+      fileName,
+      mimeType,
+      fileSize,
+      origin
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('Error initiating drive upload session:', err);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Finalize Direct Resumable Upload (Sets public permissions and returns direct URLs)
+router.post('/drive/finish-upload', async (req, res) => {
+  try {
+    const { fileId } = req.body;
+    if (!fileId) {
+      return res.status(400).json({ error: 'fileId is required' });
+    }
+    const result = await finishResumableUpload({ fileId });
+    res.json(result);
+  } catch (err) {
+    console.error('Error finalizing drive upload:', err);
+    res.status(400).json({ error: err.message });
   }
 });
 
@@ -248,8 +286,8 @@ router.post('/apps', uploadAppAssets, async (req, res) => {
     const driveActive = getDriveStatus().configured;
 
     // Handle Uploaded Icon
-    let iconUrl = '';
-    let driveIconId = null;
+    let iconUrl = req.body.icon_url || '';
+    let driveIconId = req.body.drive_icon_id || null;
 
     if (req.files && req.files.icon && req.files.icon[0]) {
       const iconF = req.files.icon[0];
@@ -272,10 +310,10 @@ router.post('/apps', uploadAppAssets, async (req, res) => {
     }
 
     // Handle Uploaded Binary Package File
-    let fileUrl = '';
-    let fileName = '';
-    let calculatedSize = file_size;
-    let driveFileId = null;
+    let fileUrl = req.body.file_url || '';
+    let fileName = req.body.file_name || '';
+    let calculatedSize = file_size || req.body.file_size || '';
+    let driveFileId = req.body.drive_file_id || null;
     let isExternal = Boolean(is_external_link);
 
     if (req.files && req.files.file && req.files.file[0]) {
@@ -304,9 +342,31 @@ router.post('/apps', uploadAppAssets, async (req, res) => {
       }
     }
 
+    if (driveFileId || (fileUrl && (fileUrl.includes('drive.google.com') || fileUrl.includes('drive.usercontent.google.com')))) {
+      isExternal = true;
+    }
+
     // Handle Uploaded Screenshots
     let screenshotUrls = [];
     let driveScreenshotIds = [];
+
+    if (req.body.screenshots) {
+      try {
+        const parsedScreenshots = typeof req.body.screenshots === 'string' ? JSON.parse(req.body.screenshots) : req.body.screenshots;
+        if (Array.isArray(parsedScreenshots)) {
+          screenshotUrls = [...parsedScreenshots];
+        }
+      } catch {}
+    }
+
+    if (req.body.drive_screenshot_ids) {
+      try {
+        const parsedDriveIds = typeof req.body.drive_screenshot_ids === 'string' ? JSON.parse(req.body.drive_screenshot_ids) : req.body.drive_screenshot_ids;
+        if (Array.isArray(parsedDriveIds)) {
+          driveScreenshotIds = [...parsedDriveIds];
+        }
+      } catch {}
+    }
 
     if (req.files && req.files.screenshots) {
       for (const s of req.files.screenshots) {
@@ -439,13 +499,13 @@ router.put('/apps/:id', uploadAppAssets, async (req, res) => {
     const driveActive = getDriveStatus().configured;
 
     // Handle Icon Update
-    let iconUrl = existing.icon_url;
-    let driveIconId = existing.drive_icon_id;
+    let iconUrl = req.body.icon_url !== undefined ? req.body.icon_url : existing.icon_url;
+    let driveIconId = req.body.drive_icon_id !== undefined ? req.body.drive_icon_id : existing.drive_icon_id;
 
     if (req.files && req.files.icon && req.files.icon[0]) {
       const iconF = req.files.icon[0];
       // Delete old Drive icon if it existed
-      if (existing.drive_icon_id) {
+      if (existing.drive_icon_id && existing.drive_icon_id !== driveIconId) {
         await deleteFromGoogleDrive(existing.drive_icon_id);
       }
       if (driveActive) {
@@ -468,10 +528,10 @@ router.put('/apps/:id', uploadAppAssets, async (req, res) => {
     }
 
     // Handle File Update
-    let fileUrl = existing.file_url;
-    let fileName = existing.file_name;
-    let calculatedSize = file_size !== undefined ? file_size : existing.file_size;
-    let driveFileId = existing.drive_file_id;
+    let fileUrl = req.body.file_url !== undefined ? req.body.file_url : existing.file_url;
+    let fileName = req.body.file_name !== undefined ? req.body.file_name : existing.file_name;
+    let calculatedSize = file_size !== undefined ? file_size : (req.body.file_size !== undefined ? req.body.file_size : existing.file_size);
+    let driveFileId = req.body.drive_file_id !== undefined ? req.body.drive_file_id : existing.drive_file_id;
     let isExternal = is_external_link !== undefined ? Boolean(is_external_link) : Boolean(existing.is_external_link);
 
     if (req.files && req.files.file && req.files.file[0]) {
@@ -480,7 +540,7 @@ router.put('/apps/:id', uploadAppAssets, async (req, res) => {
       calculatedSize = formatBytes(f.size);
 
       // Delete old Drive file if it existed
-      if (existing.drive_file_id) {
+      if (existing.drive_file_id && existing.drive_file_id !== driveFileId) {
         await deleteFromGoogleDrive(existing.drive_file_id);
       }
 
@@ -502,6 +562,10 @@ router.put('/apps/:id', uploadAppAssets, async (req, res) => {
         fileUrl = `/uploads/files/${f.filename}`;
         driveFileId = null;
       }
+    }
+
+    if (driveFileId || (fileUrl && (fileUrl.includes('drive.google.com') || fileUrl.includes('drive.usercontent.google.com')))) {
+      isExternal = true;
     }
 
     // Handle Screenshots Update

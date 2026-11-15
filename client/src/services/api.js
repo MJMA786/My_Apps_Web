@@ -135,26 +135,24 @@ export const api = {
     return res.json();
   },
 
-  async createApp(formData) {
+  async createApp(payload) {
+    const isFormData = payload instanceof FormData;
     const res = await fetch(`${API_BASE}/admin/apps`, {
       method: 'POST',
-      headers: getAuthHeaders(true),
-      body: formData
+      headers: getAuthHeaders(isFormData),
+      body: isFormData ? payload : JSON.stringify(payload)
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to create app');
-    return data;
+    return parseJsonResponse(res, 'Failed to create app');
   },
 
-  async updateApp(id, formData) {
+  async updateApp(id, payload) {
+    const isFormData = payload instanceof FormData;
     const res = await fetch(`${API_BASE}/admin/apps/${id}`, {
       method: 'PUT',
-      headers: getAuthHeaders(true),
-      body: formData
+      headers: getAuthHeaders(isFormData),
+      body: isFormData ? payload : JSON.stringify(payload)
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to update app');
-    return data;
+    return parseJsonResponse(res, 'Failed to update app');
   },
 
   async deleteApp(id) {
@@ -211,8 +209,95 @@ export const api = {
       headers: getAuthHeaders(),
       body: JSON.stringify(configData)
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to save Drive config');
-    return data;
+    return parseJsonResponse(res, 'Failed to save Drive config');
+  },
+
+  async initDriveUpload({ fileName, mimeType, fileSize }) {
+    const res = await fetch(`${API_BASE}/admin/drive/init-upload`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ fileName, mimeType, fileSize })
+    });
+    return parseJsonResponse(res, 'Failed to initialize Google Drive upload session');
+  },
+
+  async finishDriveUpload(fileId) {
+    const res = await fetch(`${API_BASE}/admin/drive/finish-upload`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ fileId })
+    });
+    return parseJsonResponse(res, 'Failed to finalize Google Drive upload');
+  },
+
+  // Direct Browser-to-Google Drive Upload with real-time Progress Tracking
+  // Completely bypasses Vercel 4.5MB serverless limits
+  async uploadFileToDrive(file, onProgress) {
+    // 1. Get resumable upload session from backend
+    const initRes = await fetch(`${API_BASE}/admin/drive/init-upload`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        fileName: file.name,
+        mimeType: file.type || 'application/octet-stream',
+        fileSize: file.size
+      })
+    });
+    const initData = await parseJsonResponse(initRes, 'Failed to initialize Drive upload session');
+    const { sessionUrl } = initData;
+
+    // 2. Upload file directly to Google Drive via XMLHttpRequest
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', sessionUrl, true);
+      xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+
+      if (xhr.upload && onProgress) {
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            const percent = Math.round((event.loaded / event.total) * 100);
+            onProgress(percent, event.loaded, event.total);
+          }
+        };
+      }
+
+      xhr.onload = async () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const driveFile = JSON.parse(xhr.responseText);
+            // 3. Finalize upload (sets public read permission & gets download link)
+            const finishRes = await fetch(`${API_BASE}/admin/drive/finish-upload`, {
+              method: 'POST',
+              headers: getAuthHeaders(),
+              body: JSON.stringify({ fileId: driveFile.id })
+            });
+            const finishData = await parseJsonResponse(finishRes, 'Failed to finalize Drive upload');
+            resolve(finishData);
+          } catch (e) {
+            reject(new Error('Failed to finalize uploaded Drive file: ' + e.message));
+          }
+        } else {
+          let errDetail = xhr.responseText;
+          try {
+            const parsed = JSON.parse(xhr.responseText);
+            if (parsed.error && parsed.error.message) {
+              errDetail = parsed.error.message;
+            }
+          } catch {}
+
+          if (xhr.status === 403 && (errDetail.includes('storage quota') || errDetail.includes('Service Accounts do not have storage quota'))) {
+            reject(new Error('GOOGLE_DRIVE_QUOTA_ERROR: Service Accounts cannot upload directly to personal @gmail.com folders. Use the External Mirror URL tab to paste your Google Drive share link!'));
+          } else {
+            reject(new Error(`Google Drive upload failed (${xhr.status}): ${errDetail}`));
+          }
+        }
+      };
+
+      xhr.onerror = () => {
+        reject(new Error('Network error during Google Drive direct upload.'));
+      };
+
+      xhr.send(file);
+    });
   }
 };
