@@ -11,12 +11,36 @@ import {
   deleteFromGoogleDrive, 
   saveDriveCredentials,
   createResumableUploadSession,
-  finishResumableUpload
+  finishResumableUpload,
+  generateOAuthUrl,
+  handleOAuthCallback,
+  disconnectOAuth,
+  saveOAuthConfig
 } from '../services/googleDrive.js';
 
 const router = express.Router();
 
-// Require admin authentication for all routes in this router
+// Public callback route for Google OAuth redirect
+router.get('/drive/callback', async (req, res) => {
+  try {
+    const { code } = req.query;
+    if (!code) {
+      return res.redirect('/admin/settings?error=' + encodeURIComponent('Missing authorization code from Google.'));
+    }
+
+    const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+    const host = req.headers['x-forwarded-host'] || req.get('host');
+    const redirectUri = `${proto}://${host}/api/admin/drive/callback`;
+
+    await handleOAuthCallback({ code, redirectUri });
+    res.redirect('/admin/settings?drive_connected=true');
+  } catch (err) {
+    console.error('Error in Google OAuth callback:', err);
+    res.redirect('/admin/settings?error=' + encodeURIComponent(err.message));
+  }
+});
+
+// Require admin authentication for all routes below
 router.use(authenticateAdmin);
 
 function slugify(text) {
@@ -91,6 +115,49 @@ router.post('/drive/config', async (req, res) => {
   } catch (err) {
     console.error('Error saving Drive config:', err);
     res.status(400).json({ error: 'Failed to configure Google Drive: ' + err.message });
+  }
+});
+
+// Generate Google OAuth 2.0 Auth URL (for user's personal @gmail.com)
+router.post('/drive/oauth/url', (req, res) => {
+  try {
+    const { clientId, clientSecret, folderId, customRedirectUri } = req.body;
+    const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+    const host = req.headers['x-forwarded-host'] || req.get('host');
+    const redirectUri = customRedirectUri || `${proto}://${host}/api/admin/drive/callback`;
+
+    const authUrl = generateOAuthUrl({
+      redirectUri,
+      clientId,
+      clientSecret,
+      folderId
+    });
+
+    res.json({ authUrl, redirectUri });
+  } catch (err) {
+    console.error('Error generating Google OAuth URL:', err);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Save OAuth Config (Client ID, Secret, and Target Folder)
+router.post('/drive/oauth/config', (req, res) => {
+  try {
+    const { clientId, clientSecret, folderId } = req.body;
+    saveOAuthConfig({ clientId, clientSecret, folderId });
+    res.json({ success: true, message: 'Google OAuth configuration saved.' });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Disconnect Google OAuth Account
+router.post('/drive/oauth/disconnect', (req, res) => {
+  try {
+    disconnectOAuth();
+    res.json({ success: true, message: 'Google Account disconnected.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

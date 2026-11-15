@@ -299,5 +299,32 @@ export const api = {
 
       xhr.send(file);
     });
+  },
+
+  // Google OAuth 2.0 Management
+  async getDriveOAuthUrl(data = {}) {
+    const res = await fetch(`${API_BASE}/admin/drive/oauth/url`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data)
+    });
+    return parseJsonResponse(res, 'Failed to generate Google OAuth URL');
+  },
+
+  async saveDriveOAuthConfig(configData) {
+    const res = await fetch(`${API_BASE}/admin/drive/oauth/config`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(configData)
+    });
+    return parseJsonResponse(res, 'Failed to save Google OAuth configuration');
+  },
+
+  async disconnectDriveOAuth() {
+    const res = await fetch(`${API_BASE}/admin/drive/oauth/disconnect`, {
+      method: 'POST',
+      headers: getAuthHeaders()
+    });
+    return parseJsonResponse(res, 'Failed to disconnect Google Account');
   }
 };

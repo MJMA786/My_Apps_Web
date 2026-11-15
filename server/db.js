@@ -86,6 +86,12 @@ function initDatabase() {
       downloaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (app_id) REFERENCES apps(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   // Migrations for Google Drive cloud storage support
@@ -116,5 +122,39 @@ function initDatabase() {
 }
 
 initDatabase();
+
+export function getSetting(key, defaultValue = null) {
+  try {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+    return row ? row.value : defaultValue;
+  } catch {
+    return defaultValue;
+  }
+}
+
+export function setSetting(key, value) {
+  try {
+    db.prepare(`
+      INSERT INTO settings (key, value, updated_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(key) DO UPDATE SET
+        value = excluded.value,
+        updated_at = CURRENT_TIMESTAMP
+    `).run(key, String(value));
+    return true;
+  } catch (e) {
+    console.error('[DB] Error saving setting:', key, e.message);
+    return false;
+  }
+}
+
+export function deleteSetting(key) {
+  try {
+    db.prepare('DELETE FROM settings WHERE key = ?').run(key);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export { db, uploadsDir, iconsDir, screenshotsDir, filesDir };

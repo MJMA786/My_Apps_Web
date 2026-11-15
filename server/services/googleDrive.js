@@ -2,6 +2,7 @@ import { google } from 'googleapis';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getSetting, setSetting, deleteSetting } from '../db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,11 +23,62 @@ export function extractFolderId(raw) {
   return trimmed;
 }
 
-// Helper to get Google Drive auth client
-export function getDriveAuth() {
-  let credentials = null;
+// Get configured target folder ID
+export function getDriveFolderId() {
+  const dbFolder = getSetting('google_drive_folder_id');
+  if (dbFolder) return extractFolderId(dbFolder);
+  const envFolder = process.env.GOOGLE_DRIVE_FOLDER_ID;
+  if (envFolder) return extractFolderId(envFolder);
+  return null;
+}
 
-  // 1. Check if JSON file exists in server/data/
+// Get OAuth Config
+export function getOAuthConfig() {
+  const clientId = getSetting('google_oauth_client_id') || process.env.GOOGLE_OAUTH_CLIENT_ID || '';
+  const clientSecret = getSetting('google_oauth_client_secret') || process.env.GOOGLE_OAUTH_CLIENT_SECRET || '';
+  return { clientId, clientSecret };
+}
+
+// Get OAuth Tokens
+export function getOAuthTokens() {
+  const tokensJson = getSetting('google_oauth_tokens') || process.env.GOOGLE_OAUTH_TOKENS;
+  if (!tokensJson) return null;
+  try {
+    return typeof tokensJson === 'string' ? JSON.parse(tokensJson) : tokensJson;
+  } catch (e) {
+    console.error('[GoogleDrive] Error parsing OAuth tokens:', e.message);
+    return null;
+  }
+}
+
+// Helper to get Google Drive auth client (Prefers OAuth2 user identity, falls back to Service Account)
+export function getDriveAuth() {
+  // 1. Try OAuth 2.0 (User personal @gmail.com)
+  const oauthConfig = getOAuthConfig();
+  const oauthTokens = getOAuthTokens();
+
+  if (oauthConfig.clientId && oauthConfig.clientSecret && oauthTokens) {
+    const oauth2Client = new google.auth.OAuth2(
+      oauthConfig.clientId,
+      oauthConfig.clientSecret
+    );
+    oauth2Client.setCredentials(oauthTokens);
+
+    oauth2Client.on('tokens', (newTokens) => {
+      const merged = { ...oauthTokens, ...newTokens };
+      setSetting('google_oauth_tokens', JSON.stringify(merged));
+      console.log('[GoogleDrive] OAuth tokens refreshed automatically and stored.');
+    });
+
+    return {
+      type: 'oauth',
+      auth: oauth2Client,
+      clientEmail: getSetting('google_oauth_user_email') || 'Google Account'
+    };
+  }
+
+  // 2. Try Service Account Key
+  let credentials = null;
   if (fs.existsSync(keyFilePath)) {
     try {
       const fileData = fs.readFileSync(keyFilePath, 'utf8');
@@ -36,7 +88,6 @@ export function getDriveAuth() {
     }
   }
 
-  // 2. Check if environment variable has JSON string
   if (!credentials && process.env.GOOGLE_DRIVE_KEY_JSON) {
     try {
       credentials = JSON.parse(process.env.GOOGLE_DRIVE_KEY_JSON);
@@ -45,34 +96,136 @@ export function getDriveAuth() {
     }
   }
 
-  if (!credentials) {
-    return null;
+  if (credentials) {
+    const auth = new google.auth.GoogleAuth({
+      credentials,
+      scopes: ['https://www.googleapis.com/auth/drive']
+    });
+    return {
+      type: 'service_account',
+      auth,
+      clientEmail: credentials.client_email
+    };
   }
 
-  const auth = new google.auth.GoogleAuth({
-    credentials,
-    scopes: ['https://www.googleapis.com/auth/drive']
-  });
-
-  return { auth, clientEmail: credentials.client_email };
+  return null;
 }
 
 // Check configuration status
 export function getDriveStatus() {
   const authInfo = getDriveAuth();
-  const folderId = extractFolderId(process.env.GOOGLE_DRIVE_FOLDER_ID);
+  const folderId = getDriveFolderId();
+  const oauthConfig = getOAuthConfig();
+  const hasTokens = Boolean(getOAuthTokens());
+
   return {
     configured: Boolean(authInfo),
+    authType: authInfo ? authInfo.type : null, // 'oauth' or 'service_account'
     clientEmail: authInfo ? authInfo.clientEmail : null,
-    folderId: folderId || null
+    folderId: folderId || null,
+    oauthClientId: oauthConfig.clientId || null,
+    hasClientSecret: Boolean(oauthConfig.clientSecret),
+    oauthConnected: Boolean(oauthConfig.clientId && hasTokens)
   };
 }
 
-// Test Drive Connection & Quota
+// Generate OAuth 2.0 Authorization URL
+export function generateOAuthUrl({ redirectUri, clientId, clientSecret, folderId }) {
+  if (clientId) {
+    setSetting('google_oauth_client_id', clientId.trim());
+  }
+  if (clientSecret) {
+    setSetting('google_oauth_client_secret', clientSecret.trim());
+  }
+  if (folderId !== undefined) {
+    setSetting('google_drive_folder_id', extractFolderId(folderId));
+  }
+
+  const conf = getOAuthConfig();
+  if (!conf.clientId || !conf.clientSecret) {
+    throw new Error('Google OAuth Client ID and Client Secret are required.');
+  }
+
+  const oauth2Client = new google.auth.OAuth2(
+    conf.clientId,
+    conf.clientSecret,
+    redirectUri
+  );
+
+  const authUrl = oauth2Client.generateAuthUrl({
+    access_type: 'offline',
+    prompt: 'consent', // Ensures a refresh_token is always returned on consent
+    scope: [
+      'https://www.googleapis.com/auth/drive',
+      'https://www.googleapis.com/auth/userinfo.email'
+    ]
+  });
+
+  return authUrl;
+}
+
+// Handle OAuth 2.0 Code Exchange Callback
+export async function handleOAuthCallback({ code, redirectUri }) {
+  if (!code) {
+    throw new Error('Authorization code is missing.');
+  }
+
+  const conf = getOAuthConfig();
+  if (!conf.clientId || !conf.clientSecret) {
+    throw new Error('OAuth configuration missing.');
+  }
+
+  const oauth2Client = new google.auth.OAuth2(
+    conf.clientId,
+    conf.clientSecret,
+    redirectUri
+  );
+
+  const { tokens } = await oauth2Client.getToken(code);
+  oauth2Client.setCredentials(tokens);
+  setSetting('google_oauth_tokens', JSON.stringify(tokens));
+
+  // Fetch real user email
+  let email = 'Google Account';
+  try {
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+    const about = await drive.about.get({ fields: 'user' });
+    if (about.data.user && about.data.user.emailAddress) {
+      email = about.data.user.emailAddress;
+    }
+  } catch (err) {
+    console.warn('[GoogleDrive] Could not fetch user email in callback:', err.message);
+  }
+
+  setSetting('google_oauth_user_email', email);
+
+  return {
+    success: true,
+    email,
+    tokens
+  };
+}
+
+// Disconnect OAuth 2.0
+export function disconnectOAuth() {
+  deleteSetting('google_oauth_tokens');
+  deleteSetting('google_oauth_user_email');
+  return { success: true };
+}
+
+// Save OAuth Config (without redirecting)
+export function saveOAuthConfig({ clientId, clientSecret, folderId }) {
+  if (clientId) setSetting('google_oauth_client_id', clientId.trim());
+  if (clientSecret) setSetting('google_oauth_client_secret', clientSecret.trim());
+  if (folderId !== undefined) setSetting('google_drive_folder_id', extractFolderId(folderId));
+  return { success: true };
+}
+
+// Test Drive Connection & Quota (Works for both OAuth and Service Account)
 export async function testDriveConnection() {
   const authInfo = getDriveAuth();
   if (!authInfo) {
-    throw new Error('Google Drive service account credentials are not configured yet.');
+    throw new Error('Google Drive is not connected yet. Connect your Google Account or Service Account in Settings.');
   }
 
   const drive = google.drive({ version: 'v3', auth: authInfo.auth });
@@ -83,7 +236,7 @@ export async function testDriveConnection() {
   });
 
   let folderName = 'Root Drive';
-  const folderId = extractFolderId(process.env.GOOGLE_DRIVE_FOLDER_ID);
+  const folderId = getDriveFolderId();
   if (folderId) {
     try {
       const folderRes = await drive.files.get({
@@ -94,12 +247,13 @@ export async function testDriveConnection() {
       folderName = folderRes.data.name;
     } catch (err) {
       console.warn('[GoogleDrive] Warning verifying folder:', err.message);
-      folderName = `${folderId} (Check folder sharing permissions)`;
+      folderName = `${folderId} (Check folder access)`;
     }
   }
 
   return {
     success: true,
+    authType: authInfo.type,
     user: about.data.user,
     storageQuota: about.data.storageQuota,
     folderId: folderId || null,
@@ -115,7 +269,7 @@ export async function uploadToGoogleDrive({ filePath, originalName, mimeType }) 
   }
 
   const drive = google.drive({ version: 'v3', auth: authInfo.auth });
-  const folderId = extractFolderId(process.env.GOOGLE_DRIVE_FOLDER_ID);
+  const folderId = getDriveFolderId();
 
   const fileMetadata = {
     name: originalName
@@ -182,12 +336,20 @@ export async function uploadToGoogleDrive({ filePath, originalName, mimeType }) 
 export async function createResumableUploadSession({ fileName, mimeType, fileSize, origin }) {
   const authInfo = getDriveAuth();
   if (!authInfo) {
-    throw new Error('Google Drive service account credentials are not configured yet.');
+    throw new Error('Google Drive is not connected yet.');
   }
 
-  const client = await authInfo.auth.getClient();
-  const token = await client.getAccessToken();
-  const folderId = extractFolderId(process.env.GOOGLE_DRIVE_FOLDER_ID);
+  let tokenString = '';
+  if (authInfo.type === 'oauth') {
+    const tokenRes = await authInfo.auth.getAccessToken();
+    tokenString = tokenRes.token;
+  } else {
+    const client = await authInfo.auth.getClient();
+    const tokenRes = await client.getAccessToken();
+    tokenString = tokenRes.token;
+  }
+
+  const folderId = getDriveFolderId();
 
   const metadata = {
     name: fileName
@@ -197,7 +359,7 @@ export async function createResumableUploadSession({ fileName, mimeType, fileSiz
   }
 
   const headers = {
-    'Authorization': `Bearer ${token.token}`,
+    'Authorization': `Bearer ${tokenString}`,
     'Content-Type': 'application/json; charset=UTF-8',
     'X-Upload-Content-Type': mimeType || 'application/octet-stream'
   };
@@ -308,7 +470,7 @@ export async function deleteFromGoogleDrive(driveFileId) {
   }
 }
 
-// Save Service Account Key from Admin Dashboard
+// Save Service Account Key from Admin Dashboard (Legacy / Workspace fallback)
 export function saveDriveCredentials(keyJsonString, folderId) {
   const parsed = typeof keyJsonString === 'string' ? JSON.parse(keyJsonString) : keyJsonString;
   if (!parsed.client_email || !parsed.private_key) {
@@ -319,6 +481,7 @@ export function saveDriveCredentials(keyJsonString, folderId) {
 
   if (folderId !== undefined) {
     const cleanId = extractFolderId(folderId);
+    setSetting('google_drive_folder_id', cleanId);
     if (!isVercel) {
       try {
         const envPath = path.join(__dirname, '..', '.env');
