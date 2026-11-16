@@ -1219,4 +1219,36 @@ router.patch('/apps/:id/status', async (req, res) => {
   }
 });
 
+// Purge Server & CDN Caches and Force Global Catalog Refresh
+router.post('/system/purge-cache', async (req, res) => {
+  try {
+    // 1. Force refresh apps from Google Drive cloud backup
+    const driveApps = await fetchCatalogFromGoogleDrive();
+    if (driveApps && Array.isArray(driveApps) && driveApps.length > 0) {
+      restoreAppsToDb(driveApps);
+      saveCatalogSnapshot(driveApps);
+    } else {
+      await ensureAppsLoaded(true);
+    }
+
+    const allApps = getAllAppsFromDb();
+    saveCatalogSnapshot(allApps);
+
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+
+    res.json({
+      success: true,
+      message: `Website reset successful! ${allApps.length} apps synchronized freshly from Google Drive.`,
+      appCount: allApps.length,
+      timestamp: Date.now(),
+      propagationTimeSeconds: 15
+    });
+  } catch (err) {
+    console.error('Error purging cache:', err);
+    res.status(500).json({ error: 'Failed to purge website cache: ' + err.message });
+  }
+});
+
 export default router;

@@ -6,26 +6,47 @@ import { fetchCatalogFromGoogleDrive, saveCatalogToGoogleDrive, extractDriveFile
 
 const router = express.Router();
 
-// Ensure apps are loaded into SQLite /tmp on serverless cold starts
-export async function ensureAppsLoaded() {
+// Enforce zero stale caching on all public app catalog endpoints
+router.use((req, res, next) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
+
+let lastCatalogSyncTime = 0;
+const CATALOG_SYNC_TTL_MS = 15000; // 15 seconds
+
+// Ensure apps are loaded into SQLite /tmp on serverless cold starts & synced on updates
+export async function ensureAppsLoaded(force = false) {
   try {
+    const now = Date.now();
     const row = db.prepare('SELECT count(*) as count FROM apps').get();
-    if (row && row.count > 0) return;
+    const hasApps = row && row.count > 0;
+
+    // If we already have apps, force is false, and checked recently, skip
+    if (hasApps && !force && (now - lastCatalogSyncTime < CATALOG_SYNC_TTL_MS)) {
+      return;
+    }
+    lastCatalogSyncTime = now;
 
     // 1. Try local snapshot
     const snapshot = loadCatalogSnapshot();
     if (snapshot && Array.isArray(snapshot) && snapshot.length > 0) {
-      restoreAppsToDb(snapshot);
-      console.log(`[Apps] Restored ${snapshot.length} apps from local disk snapshot.`);
-      return;
+      if (!hasApps || force) {
+        restoreAppsToDb(snapshot);
+        console.log(`[Apps] Restored ${snapshot.length} apps from local disk snapshot.`);
+      }
     }
 
     // 2. Try Google Drive cloud catalog
-    const driveApps = await fetchCatalogFromGoogleDrive();
-    if (driveApps && Array.isArray(driveApps) && driveApps.length > 0) {
-      restoreAppsToDb(driveApps);
-      saveCatalogSnapshot(driveApps);
-      console.log(`[Apps] Restored ${driveApps.length} apps from Google Drive cloud backup!`);
+    if (!hasApps || force) {
+      const driveApps = await fetchCatalogFromGoogleDrive();
+      if (driveApps && Array.isArray(driveApps) && driveApps.length > 0) {
+        restoreAppsToDb(driveApps);
+        saveCatalogSnapshot(driveApps);
+        console.log(`[Apps] Restored/Synced ${driveApps.length} apps from Google Drive cloud backup!`);
+      }
     }
   } catch (err) {
     console.warn('[Apps] Could not ensure apps loaded:', err.message);
@@ -110,7 +131,7 @@ router.get('/platforms', async (req, res) => {
 // List Apps (Filtered, Searched, Paginated)
 router.get('/', async (req, res) => {
   try {
-    await ensureAppsLoaded();
+    await ensureAppsLoaded(Boolean(req.query.refresh || req.query._t));
     const {
       search = '',
       category = '',

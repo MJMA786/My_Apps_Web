@@ -23,7 +23,9 @@ import {
   Sparkles,
   Download,
   Upload,
-  Trash2
+  Trash2,
+  Timer,
+  Loader2
 } from 'lucide-react';
 
 export default function AdminSettingsPage() {
@@ -69,6 +71,12 @@ export default function AdminSettingsPage() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+
+  // Website Reset & Cache Purge states
+  const [purgingCache, setPurgingCache] = useState(false);
+  const [purgeCountdown, setPurgeCountdown] = useState(0);
+  const [lastPurgeTime, setLastPurgeTime] = useState(() => localStorage.getItem('myapps_last_purge_time') || '');
+  const [liveVerified, setLiveVerified] = useState(false);
 
   // Dynamically determine redirect URI based on current browser origin
   const redirectUri = typeof window !== 'undefined' 
@@ -327,6 +335,49 @@ export default function AdminSettingsPage() {
       }
     };
     reader.readAsText(file);
+  };
+
+  // Propagation timer countdown effect
+  useEffect(() => {
+    let interval = null;
+    if (purgeCountdown > 0) {
+      interval = setInterval(() => {
+        setPurgeCountdown((prev) => {
+          if (prev <= 1) {
+            clearInterval(interval);
+            setLiveVerified(true);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [purgeCountdown]);
+
+  // Handle Instant Website Reset & Live Cache Purge
+  const handlePurgeWebsiteCache = async () => {
+    setPurgingCache(true);
+    setError('');
+    setSuccess('');
+    setLiveVerified(false);
+
+    try {
+      const res = await api.purgeWebsiteCache();
+      const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      localStorage.setItem('myapps_last_purge_time', nowStr);
+      setLastPurgeTime(nowStr);
+      setSuccess(res.message || 'Website cache purged successfully.');
+      
+      // Start 15-second global CDN propagation countdown timer
+      setPurgeCountdown(15);
+    } catch (err) {
+      setError(err.message || 'Failed to purge website cache.');
+    } finally {
+      setPurgingCache(false);
+    }
   };
 
   // Update Admin Profile / Password
@@ -859,6 +910,110 @@ export default function AdminSettingsPage() {
             <HardDrive className="w-3.5 h-3.5 flex-shrink-0 text-indigo-400" />
             Your browser also stores a local cache so the admin dashboard and home page never appear empty after server inactivity.
           </p>
+        </div>
+      </div>
+
+      {/* SECTION 2.5: Instant Website Reset & Live Cache Purge with Countdown Timer */}
+      <div className="rounded-3xl bg-slate-900/80 border border-slate-800 p-6 sm:p-8 space-y-6 shadow-xl relative overflow-hidden">
+        {/* Glow ambient background effect */}
+        <div className="absolute top-0 right-0 w-80 h-80 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
+
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
+              <RefreshCw className={`w-5 h-5 ${purgingCache || purgeCountdown > 0 ? 'animate-spin' : ''}`} />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <span>Instant Website Reset & Live Cache Purge</span>
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                  Global Refresh
+                </span>
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Uploaded or updated an app and the website is still showing older data? Reset the website and purge all serverless memory, CDN edge caches, and browser storage.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handlePurgeWebsiteCache}
+              disabled={purgingCache || purgeCountdown > 0}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-indigo-600 hover:from-amber-400 hover:to-indigo-500 disabled:opacity-50 text-white font-bold text-xs shadow-lg shadow-indigo-900/30 transition-all hover:scale-[1.02] active:scale-95"
+            >
+              <RefreshCw className={`w-4 h-4 ${purgingCache ? 'animate-spin' : ''}`} />
+              <span>{purgingCache ? 'Purging Cache...' : (purgeCountdown > 0 ? `Syncing (${purgeCountdown}s)` : 'Reset & Refresh Website')}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Live Countdown & Propagation Timer Card */}
+        {purgeCountdown > 0 && (
+          <div className="p-5 rounded-2xl bg-indigo-950/40 border border-indigo-500/40 space-y-3">
+            <div className="flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2 text-indigo-300 font-semibold">
+                <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+                <span>Propagating fresh data across global CDN edge nodes...</span>
+              </div>
+              <span className="font-mono text-amber-400 font-bold text-base">{purgeCountdown}s</span>
+            </div>
+
+            {/* Countdown Progress Bar */}
+            <div className="w-full h-2.5 rounded-full bg-slate-900 overflow-hidden">
+              <div 
+                className="h-full bg-gradient-to-r from-amber-400 via-indigo-500 to-emerald-400 transition-all duration-1000 ease-linear"
+                style={{ width: `${Math.round(((15 - purgeCountdown) / 15) * 100)}%` }}
+              />
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between text-[11px] text-slate-400 gap-1 pt-1">
+              <span>If your visitors still see older data, edge nodes are reloading. Full global change will be live in <strong>{purgeCountdown} seconds</strong>.</span>
+              <span className="text-amber-400 font-medium">Bypassing local browser caches</span>
+            </div>
+          </div>
+        )}
+
+        {/* Sync Success State */}
+        {liveVerified && purgeCountdown === 0 && (
+          <div className="p-4 rounded-2xl bg-emerald-950/40 border border-emerald-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2.5 text-emerald-300">
+              <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0" />
+              <div>
+                <p className="font-bold text-emerald-200">Website Cache Reset Complete!</p>
+                <p className="text-[11px] text-emerald-400/80">All serverless lambdas and global edge caches have been refreshed with the latest data.</p>
+              </div>
+            </div>
+
+            <a
+              href={`/?refresh=${Date.now()}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-colors shadow-md flex-shrink-0"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>Verify Live Website Now</span>
+            </a>
+          </div>
+        )}
+
+        {/* Information note & last sync timestamp */}
+        <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-[11px] text-slate-400 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-slate-400">
+            <Timer className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />
+            <span>
+              {lastPurgeTime ? (
+                <>Last Website Reset: <strong className="text-slate-200">{lastPurgeTime}</strong></>
+              ) : (
+                'Click "Reset & Refresh Website" whenever you upload or edit an app to immediately publish changes.'
+              )}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-slate-500 font-mono">Edge TTL: Instant on Purge • Max Propagation: 15s</span>
+          </div>
         </div>
       </div>
 

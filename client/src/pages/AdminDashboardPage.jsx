@@ -33,6 +33,33 @@ export default function AdminDashboardPage() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Quick Cache Purge state
+  const [quickPurging, setQuickPurging] = useState(false);
+  const [quickPurgeTimer, setQuickPurgeTimer] = useState(0);
+
+  useEffect(() => {
+    let interval = null;
+    if (quickPurgeTimer > 0) {
+      interval = setInterval(() => {
+        setQuickPurgeTimer(t => (t <= 1 ? 0 : t - 1));
+      }, 1000);
+    }
+    return () => { if (interval) clearInterval(interval); };
+  }, [quickPurgeTimer]);
+
+  const handleQuickPurge = async () => {
+    setQuickPurging(true);
+    try {
+      await api.purgeWebsiteCache();
+      setQuickPurgeTimer(15);
+      await loadData();
+    } catch (e) {
+      alert('Failed to purge cache: ' + e.message);
+    } finally {
+      setQuickPurging(false);
+    }
+  };
+
   const loadData = async () => {
     setLoading(true);
     try {
@@ -117,7 +144,18 @@ export default function AdminDashboardPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+          <button
+            type="button"
+            onClick={handleQuickPurge}
+            disabled={quickPurging || quickPurgeTimer > 0}
+            title="Purge Vercel CDN cache and reset website data"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-300 text-xs font-medium transition-colors"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-amber-400 ${quickPurging || quickPurgeTimer > 0 ? 'animate-spin' : ''}`} />
+            <span>{quickPurgeTimer > 0 ? `Syncing (${quickPurgeTimer}s)` : (quickPurging ? 'Purging...' : 'Purge Cache')}</span>
+          </button>
+
           <Link
             to="/admin/settings"
             className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-300 text-xs font-medium transition-colors"

@@ -43,7 +43,10 @@ function getAuthHeaders(isFormData = false) {
 export const api = {
   // Public App APIs
   async getFeaturedApps() {
-    const res = await fetch(`${API_BASE}/apps/featured`);
+    const res = await fetch(`${API_BASE}/apps/featured?_t=${Date.now()}`, {
+      cache: 'no-cache',
+      headers: { 'Pragma': 'no-cache' }
+    });
     if (!res.ok) throw new Error('Failed to fetch featured apps');
     return res.json();
   },
@@ -56,8 +59,12 @@ export const api = {
     if (params.sort) query.append('sort', params.sort);
     if (params.page) query.append('page', params.page);
     if (params.limit) query.append('limit', params.limit);
+    query.append('_t', String(Date.now()));
 
-    const res = await fetch(`${API_BASE}/apps?${query.toString()}`);
+    const res = await fetch(`${API_BASE}/apps?${query.toString()}`, {
+      cache: 'no-cache',
+      headers: { 'Pragma': 'no-cache' }
+    });
     if (!res.ok) throw new Error('Failed to fetch apps');
     const data = await res.json();
     if (data.apps && Array.isArray(data.apps)) {
@@ -403,5 +410,18 @@ export const api = {
       headers: getAuthHeaders()
     });
     return parseJsonResponse(res, 'Failed to clean orphaned Drive files');
+  },
+
+  async purgeWebsiteCache() {
+    try {
+      localStorage.removeItem('myapps_catalog_cache');
+    } catch {}
+
+    const res = await fetch(`${API_BASE}/admin/system/purge-cache`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      cache: 'no-cache'
+    });
+    return parseJsonResponse(res, 'Failed to purge website cache');
   }
 };
