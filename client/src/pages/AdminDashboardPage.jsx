@@ -50,7 +50,15 @@ export default function AdminDashboardPage() {
             console.log('[Admin] Cold start detected. Auto-restoring apps to server...', cached.length);
             await api.syncCatalog(cached);
             finalApps = cached;
+            try {
+              const freshStats = await api.getAdminStats();
+              setStats(freshStats);
+            } catch {}
           }
+        } catch {}
+      } else if (Array.isArray(appsRes) && appsRes.length > 0) {
+        try {
+          localStorage.setItem('myapps_catalog_cache', JSON.stringify(appsRes));
         } catch {}
       }
 
@@ -93,6 +101,13 @@ export default function AdminDashboardPage() {
     setDeleting(true);
     try {
       await api.deleteApp(deleteTarget.id);
+      // Clean from localStorage cache as well so auto-restore never resurrects deleted apps
+      try {
+        const cached = JSON.parse(localStorage.getItem('myapps_catalog_cache') || '[]');
+        if (Array.isArray(cached)) {
+          localStorage.setItem('myapps_catalog_cache', JSON.stringify(cached.filter(a => a.id !== deleteTarget.id)));
+        }
+      } catch {}
       setDeleteTarget(null);
       loadData();
     } catch (err) {

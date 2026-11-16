@@ -257,9 +257,9 @@ export default function AdminAppFormPage() {
     setSubmitting(true);
 
     try {
-      // 1. If an app file > 4.5MB was selected and not uploaded directly to Drive yet
+      // 1. If an app file was selected and Google Drive is configured, upload directly to Drive (bypasses serverless ephemeral limits)
       let activeDriveInfo = driveUploadedInfo;
-      if (!isExternalLink && appFile && !activeDriveInfo && appFile.size > 4.5 * 1024 * 1024) {
+      if (!isExternalLink && appFile && !activeDriveInfo) {
         if (driveConfigured) {
           try {
             setDriveUploadStatus('uploading');
@@ -275,8 +275,8 @@ export default function AdminAppFormPage() {
             setSubmitting(false);
             return;
           }
-        } else {
-          setError(`File (${fileSize}) exceeds Vercel's 4.5 MB limit. Please select "External Mirror URL" to paste your Google Drive link.`);
+        } else if (appFile.size > 4.5 * 1024 * 1024) {
+          setError(`File (${fileSize}) exceeds Vercel's 4.5 MB limit. Please connect Google Drive in Settings or select "External Mirror URL".`);
           setSubmitting(false);
           return;
         }

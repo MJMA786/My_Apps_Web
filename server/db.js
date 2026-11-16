@@ -184,7 +184,7 @@ export function restoreAppsToDb(appsList) {
       changelog = excluded.changelog,
       is_featured = excluded.is_featured,
       status = excluded.status,
-      download_count = excluded.download_count,
+      download_count = MAX(COALESCE(apps.download_count, 0), COALESCE(excluded.download_count, 0)),
       rating = excluded.rating,
       drive_file_id = excluded.drive_file_id,
       drive_icon_id = excluded.drive_icon_id,
@@ -233,8 +233,20 @@ export function restoreAppsToDb(appsList) {
 
 export function saveCatalogSnapshot(appsList) {
   try {
+    if (!Array.isArray(appsList)) return false;
     const catalogPath = path.join(dataDir, 'catalog.json');
     fs.writeFileSync(catalogPath, JSON.stringify(appsList, null, 2), 'utf8');
+
+    // Also persist to server/data/catalog.json fallback
+    const bundledDataDir = path.join(__dirname, 'data');
+    if (!fs.existsSync(bundledDataDir)) {
+      try { fs.mkdirSync(bundledDataDir, { recursive: true }); } catch {}
+    }
+    const fallbackPath = path.join(bundledDataDir, 'catalog.json');
+    try {
+      fs.writeFileSync(fallbackPath, JSON.stringify(appsList, null, 2), 'utf8');
+    } catch {}
+
     return true;
   } catch (e) {
     console.warn('[DB] Could not save catalog snapshot:', e.message);

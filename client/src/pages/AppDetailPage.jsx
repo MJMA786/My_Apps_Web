@@ -60,6 +60,20 @@ export default function AppDetailPage() {
     window.location.href = api.getDownloadUrl(app.slug);
     // Optimistically bump local download count
     setApp(prev => ({ ...prev, download_count: (prev.download_count || 0) + 1 }));
+
+    // Also update client cached catalog in localStorage so cold recovery uses latest count
+    try {
+      const cached = JSON.parse(localStorage.getItem('myapps_catalog_cache') || '[]');
+      if (Array.isArray(cached) && cached.length > 0) {
+        const updated = cached.map(item => {
+          if (item.slug === app.slug || item.id === app.id) {
+            return { ...item, download_count: (item.download_count || 0) + 1 };
+          }
+          return item;
+        });
+        localStorage.setItem('myapps_catalog_cache', JSON.stringify(updated));
+      }
+    } catch {}
   };
 
   if (loading) {

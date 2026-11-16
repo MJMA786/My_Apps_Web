@@ -1,8 +1,8 @@
 import express from 'express';
 import path from 'node:path';
 import fs from 'node:fs';
-import { db, filesDir, loadCatalogSnapshot, restoreAppsToDb, saveCatalogSnapshot } from '../db.js';
-import { fetchCatalogFromGoogleDrive } from '../services/googleDrive.js';
+import { db, filesDir, loadCatalogSnapshot, restoreAppsToDb, saveCatalogSnapshot, getAllAppsFromDb } from '../db.js';
+import { fetchCatalogFromGoogleDrive, saveCatalogToGoogleDrive, extractDriveFileId } from '../services/googleDrive.js';
 
 const router = express.Router();
 
@@ -47,9 +47,9 @@ function formatApp(row) {
 // Helper to convert Google Drive share/view links into direct download links
 function formatDirectDriveDownloadUrl(url) {
   if (!url) return url;
-  const match = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-  if (match && match[1]) {
-    return `https://drive.usercontent.google.com/download?id=${match[1]}&export=download`;
+  const fileId = extractDriveFileId(url);
+  if (fileId) {
+    return `https://drive.usercontent.google.com/download?id=${fileId}&export=download`;
   }
   return url;
 }
@@ -230,18 +230,47 @@ router.get('/:slug/download', async (req, res) => {
     // Record download log
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
     const userAgent = req.headers['user-agent'] || 'unknown';
-    db.prepare(`
-      INSERT INTO download_logs (app_id, ip_address, user_agent)
-      VALUES (?, ?, ?)
-    `).run(app.id, String(ip), String(userAgent));
+    try {
+      db.prepare(`
+        INSERT INTO download_logs (app_id, ip_address, user_agent)
+        VALUES (?, ?, ?)
+      `).run(app.id, String(ip), String(userAgent));
+    } catch {}
 
-    // Handle external URL download
+    // Persist updated download count to local snapshot & Google Drive cloud backup
+    try {
+      const allApps = getAllAppsFromDb();
+      saveCatalogSnapshot(allApps);
+      saveCatalogToGoogleDrive(allApps).catch(err => {
+        console.warn('[GoogleDrive] Syncing download count to Google Drive failed:', err.message);
+      });
+    } catch (saveErr) {
+      console.warn('[Apps] Failed to save catalog snapshot on download:', saveErr.message);
+    }
+
+    // 1. Direct Drive download if drive_file_id is set
+    if (app.drive_file_id) {
+      return res.redirect(`https://drive.usercontent.google.com/download?id=${app.drive_file_id}&export=download`);
+    }
+
+    // 2. Drive file ID in file_url or external_download_url
+    const extractedFileId = extractDriveFileId(app.file_url) || extractDriveFileId(app.external_download_url);
+    if (extractedFileId) {
+      return res.redirect(`https://drive.usercontent.google.com/download?id=${extractedFileId}&export=download`);
+    }
+
+    // 3. HTTP / HTTPS file_url or external download link
     if (app.is_external_link && app.external_download_url) {
       const downloadUrl = formatDirectDriveDownloadUrl(app.external_download_url);
       return res.redirect(downloadUrl);
     }
 
-    // Handle local file download
+    if (app.file_url && (app.file_url.startsWith('http://') || app.file_url.startsWith('https://'))) {
+      const downloadUrl = formatDirectDriveDownloadUrl(app.file_url);
+      return res.redirect(downloadUrl);
+    }
+
+    // 4. Handle local file download (e.g. dev mode or persistent storage)
     if (app.file_url) {
       // If file_url is a relative path or filename
       let fileName = path.basename(app.file_url);
@@ -264,7 +293,7 @@ router.get('/:slug/download', async (req, res) => {
 
     // If external fallback exists
     if (app.external_download_url) {
-      return res.redirect(app.external_download_url);
+      return res.redirect(formatDirectDriveDownloadUrl(app.external_download_url));
     }
 
     // Fallback: If demo file was requested, generate sample attachment

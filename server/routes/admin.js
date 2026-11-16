@@ -28,7 +28,9 @@ import {
   saveOAuthConfig,
   syncDriveAuth,
   saveCatalogToGoogleDrive,
-  fetchCatalogFromGoogleDrive
+  fetchCatalogFromGoogleDrive,
+  extractDriveFileId,
+  formatDirectDriveDownloadUrl
 } from '../services/googleDrive.js';
 import { ensureAppsLoaded } from './apps.js';
 
@@ -177,16 +179,6 @@ function formatBytes(bytes, decimals = 1) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }
 
-function formatDirectDriveDownloadUrl(url) {
-  if (!url) return '';
-  const trimmed = url.trim();
-  const match = trimmed.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || trimmed.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-  if (match && match[1]) {
-    return `https://drive.usercontent.google.com/download?id=${match[1]}&export=download`;
-  }
-  return trimmed;
-}
-
 // ==========================================
 // Google Drive Integration Status & Config
 // ==========================================
@@ -328,8 +320,9 @@ router.post('/drive/finish-upload', async (req, res) => {
 // Analytics & Dashboard Stats
 // ==========================================
 
-router.get('/stats', (req, res) => {
+router.get('/stats', async (req, res) => {
   try {
+    await ensureAppsLoaded();
     const totalAppsRow = db.prepare('SELECT COUNT(*) as count FROM apps').get();
     const publishedAppsRow = db.prepare("SELECT COUNT(*) as count FROM apps WHERE status = 'published'").get();
     const draftAppsRow = db.prepare("SELECT COUNT(*) as count FROM apps WHERE status = 'draft'").get();
@@ -429,8 +422,9 @@ router.get('/apps', async (req, res) => {
 });
 
 // Admin Get Single App by ID
-router.get('/apps/:id', (req, res) => {
+router.get('/apps/:id', async (req, res) => {
   try {
+    await ensureAppsLoaded();
     const app = db.prepare('SELECT * FROM apps WHERE id = ?').get(req.params.id);
     if (!app) {
       return res.status(404).json({ error: 'App not found' });
@@ -452,6 +446,7 @@ router.get('/apps/:id', (req, res) => {
 // Admin Create New App (Supports Google Drive auto upload)
 router.post('/apps', uploadAppAssets, async (req, res) => {
   try {
+    await ensureAppsLoaded();
     const {
       title,
       slug,
@@ -674,12 +669,16 @@ router.post('/apps', uploadAppAssets, async (req, res) => {
 // Admin Update Existing App (Supports Google Drive replace & delete)
 router.put('/apps/:id', uploadAppAssets, async (req, res) => {
   try {
+    await ensureAppsLoaded();
     const { id } = req.params;
     const existing = db.prepare('SELECT * FROM apps WHERE id = ?').get(id);
 
     if (!existing) {
       return res.status(404).json({ error: 'App not found' });
     }
+
+    const oldDriveFileId = existing.drive_file_id || extractDriveFileId(existing.file_url) || extractDriveFileId(existing.external_download_url);
+    const oldDriveIconId = existing.drive_icon_id || extractDriveFileId(existing.icon_url);
 
     const {
       title,
@@ -718,10 +717,6 @@ router.put('/apps/:id', uploadAppAssets, async (req, res) => {
 
     if (req.files && req.files.icon && req.files.icon[0]) {
       const iconF = req.files.icon[0];
-      // Delete old Drive icon if it existed
-      if (existing.drive_icon_id && existing.drive_icon_id !== driveIconId) {
-        await deleteFromGoogleDrive(existing.drive_icon_id);
-      }
       if (driveActive) {
         try {
           const driveRes = await uploadToGoogleDrive({
@@ -741,6 +736,22 @@ router.put('/apps/:id', uploadAppAssets, async (req, res) => {
       }
     }
 
+    const newDriveIconId = driveIconId || extractDriveFileId(iconUrl);
+    const isNewIconProvided = Boolean(
+      (req.files && req.files.icon && req.files.icon[0]) ||
+      (req.body.drive_icon_id && req.body.drive_icon_id !== existing.drive_icon_id) ||
+      (req.body.icon_url && req.body.icon_url !== existing.icon_url)
+    );
+
+    if (isNewIconProvided && oldDriveIconId && oldDriveIconId !== newDriveIconId) {
+      console.log(`[UpdateApp] Deleting previous Google Drive icon (${oldDriveIconId})...`);
+      try {
+        await deleteFromGoogleDrive(oldDriveIconId);
+      } catch (iconDelErr) {
+        console.warn(`[UpdateApp] Failed to delete previous Drive icon ${oldDriveIconId}:`, iconDelErr.message);
+      }
+    }
+
     // Handle File Update
     let fileUrl = req.body.file_url !== undefined ? req.body.file_url : existing.file_url;
     let fileName = req.body.file_name !== undefined ? req.body.file_name : existing.file_name;
@@ -752,11 +763,6 @@ router.put('/apps/:id', uploadAppAssets, async (req, res) => {
       const f = req.files.file[0];
       fileName = f.originalname;
       calculatedSize = formatBytes(f.size);
-
-      // Delete old Drive file if it existed
-      if (existing.drive_file_id && existing.drive_file_id !== driveFileId) {
-        await deleteFromGoogleDrive(existing.drive_file_id);
-      }
 
       if (driveActive) {
         try {
@@ -775,6 +781,23 @@ router.put('/apps/:id', uploadAppAssets, async (req, res) => {
       } else {
         fileUrl = `/uploads/files/${f.filename}`;
         driveFileId = null;
+      }
+    }
+
+    const newDriveFileId = driveFileId || extractDriveFileId(fileUrl) || extractDriveFileId(req.body.external_download_url);
+    const isNewFileProvided = Boolean(
+      (req.files && req.files.file && req.files.file[0]) ||
+      (req.body.drive_file_id && req.body.drive_file_id !== existing.drive_file_id) ||
+      (req.body.file_url && req.body.file_url !== existing.file_url) ||
+      (req.body.external_download_url && req.body.external_download_url !== existing.external_download_url)
+    );
+
+    if (isNewFileProvided && oldDriveFileId && oldDriveFileId !== newDriveFileId) {
+      console.log(`[UpdateApp] Deleting previous Google Drive package file (${oldDriveFileId})...`);
+      try {
+        await deleteFromGoogleDrive(oldDriveFileId);
+      } catch (fileDelErr) {
+        console.warn(`[UpdateApp] Failed to delete previous Drive file ${oldDriveFileId}:`, fileDelErr.message);
       }
     }
 
@@ -821,6 +844,21 @@ router.put('/apps/:id', uploadAppAssets, async (req, res) => {
           currentScreenshots.push(`/uploads/screenshots/${s.filename}`);
         }
       }
+    }
+
+    // Clean up any deleted screenshots from Google Drive
+    if (existing.drive_screenshot_ids) {
+      try {
+        const oldScreenshotIds = JSON.parse(existing.drive_screenshot_ids);
+        if (Array.isArray(oldScreenshotIds)) {
+          for (const sId of oldScreenshotIds) {
+            const stillUsed = currentScreenshots.some(url => url && url.includes(sId));
+            if (!stillUsed) {
+              deleteFromGoogleDrive(sId).catch(() => {});
+            }
+          }
+        }
+      } catch {}
     }
 
     // Features format
@@ -922,6 +960,7 @@ router.put('/apps/:id', uploadAppAssets, async (req, res) => {
 // Admin Delete App (Automatically deletes from Google Drive & frees storage!)
 router.delete('/apps/:id', async (req, res) => {
   try {
+    await ensureAppsLoaded();
     const { id } = req.params;
     const app = db.prepare('SELECT * FROM apps WHERE id = ?').get(id);
 
@@ -930,14 +969,24 @@ router.delete('/apps/:id', async (req, res) => {
     }
 
     // 1. Delete app package file from Google Drive
-    if (app.drive_file_id) {
-      console.log(`[DeleteApp] Removing app binary from Google Drive (${app.drive_file_id})...`);
-      await deleteFromGoogleDrive(app.drive_file_id);
+    const fileIdToDelete = app.drive_file_id || extractDriveFileId(app.file_url) || extractDriveFileId(app.external_download_url);
+    if (fileIdToDelete) {
+      console.log(`[DeleteApp] Removing app binary from Google Drive (${fileIdToDelete})...`);
+      try {
+        await deleteFromGoogleDrive(fileIdToDelete);
+      } catch (err) {
+        console.warn(`[DeleteApp] Failed to delete file ${fileIdToDelete} from Drive:`, err.message);
+      }
     }
 
     // 2. Delete icon from Google Drive
-    if (app.drive_icon_id) {
-      await deleteFromGoogleDrive(app.drive_icon_id);
+    const iconIdToDelete = app.drive_icon_id || extractDriveFileId(app.icon_url);
+    if (iconIdToDelete) {
+      try {
+        await deleteFromGoogleDrive(iconIdToDelete);
+      } catch (err) {
+        console.warn(`[DeleteApp] Failed to delete icon ${iconIdToDelete} from Drive:`, err.message);
+      }
     }
 
     // 3. Delete screenshots from Google Drive
@@ -968,6 +1017,9 @@ router.delete('/apps/:id', async (req, res) => {
     }
 
     db.prepare('DELETE FROM apps WHERE id = ?').run(id);
+    try {
+      db.prepare('DELETE FROM download_logs WHERE app_id = ?').run(id);
+    } catch {}
 
     // Persist catalog to local snapshot and Google Drive cloud storage
     try {
@@ -989,8 +1041,9 @@ router.delete('/apps/:id', async (req, res) => {
 });
 
 // Toggle Featured Status
-router.patch('/apps/:id/featured', (req, res) => {
+router.patch('/apps/:id/featured', async (req, res) => {
   try {
+    await ensureAppsLoaded();
     const { id } = req.params;
     const app = db.prepare('SELECT id, is_featured FROM apps WHERE id = ?').get(id);
     if (!app) {
@@ -1069,8 +1122,9 @@ router.post('/apps/restore-drive', async (req, res) => {
 });
 
 // Export Catalog as JSON
-router.get('/apps/export', (req, res) => {
+router.get('/apps/export', async (req, res) => {
   try {
+    await ensureAppsLoaded();
     const allApps = getAllAppsFromDb();
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Content-Disposition', 'attachment; filename="myapps_catalog_export.json"');
@@ -1081,15 +1135,29 @@ router.get('/apps/export', (req, res) => {
 });
 
 // Toggle Published / Draft Status
-router.patch('/apps/:id/status', (req, res) => {
+router.patch('/apps/:id/status', async (req, res) => {
   try {
+    await ensureAppsLoaded();
     const { id } = req.params;
     const { status } = req.body;
     if (!['published', 'draft'].includes(status)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
 
+    const app = db.prepare('SELECT id FROM apps WHERE id = ?').get(id);
+    if (!app) {
+      return res.status(404).json({ error: 'App not found' });
+    }
+
     db.prepare('UPDATE apps SET status = ? WHERE id = ?').run(status, id);
+
+    // Persist catalog
+    try {
+      const allApps = getAllAppsFromDb();
+      saveCatalogSnapshot(allApps);
+      saveCatalogToGoogleDrive(allApps).catch(() => {});
+    } catch {}
+
     res.json({ success: true, status });
   } catch (err) {
     res.status(500).json({ error: 'Failed to update status' });

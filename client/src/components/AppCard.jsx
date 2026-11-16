@@ -30,6 +30,18 @@ export default function AppCard({ app, onDownloadClick }) {
       onDownloadClick(app);
     } else {
       window.location.href = api.getDownloadUrl(app.slug);
+      try {
+        const cached = JSON.parse(localStorage.getItem('myapps_catalog_cache') || '[]');
+        if (Array.isArray(cached) && cached.length > 0) {
+          const updated = cached.map(item => {
+            if (item.slug === app.slug || item.id === app.id) {
+              return { ...item, download_count: (item.download_count || 0) + 1 };
+            }
+            return item;
+          });
+          localStorage.setItem('myapps_catalog_cache', JSON.stringify(updated));
+        }
+      } catch {}
     }
   };
 

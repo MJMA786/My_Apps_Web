@@ -23,6 +23,32 @@ export function extractFolderId(raw) {
   return trimmed;
 }
 
+// Helper to extract clean file ID from raw string or full URL (e.g. drive.google.com/file/d/XYZ or ?id=XYZ)
+export function extractDriveFileId(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  const fileMatch = trimmed.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (fileMatch) return fileMatch[1];
+  const idMatch = trimmed.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (idMatch) return idMatch[1];
+  const dMatch = trimmed.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  if (dMatch) return dMatch[1];
+  if (/^[a-zA-Z0-9_-]{20,}$/.test(trimmed) && !trimmed.includes('http') && !trimmed.includes('/') && !trimmed.includes('.')) {
+    return trimmed;
+  }
+  return null;
+}
+
+// Helper to convert Google Drive share/view links into direct download links
+export function formatDirectDriveDownloadUrl(url) {
+  if (!url) return '';
+  const fileId = extractDriveFileId(url);
+  if (fileId) {
+    return `https://drive.usercontent.google.com/download?id=${fileId}&export=download`;
+  }
+  return url.trim();
+}
+
 // Get configured target folder ID
 export function getDriveFolderId() {
   const dbFolder = getSetting('google_drive_folder_id');
@@ -254,8 +280,14 @@ export function saveOAuthConfig({ clientId, clientSecret, folderId }) {
 // Sync full Drive auth credentials from client session/localStorage
 export function syncDriveAuth({ tokens, clientId, clientSecret, folderId, email }) {
   if (tokens) {
-    const tokensStr = typeof tokens === 'string' ? tokens : JSON.stringify(tokens);
-    setSetting('google_oauth_tokens', tokensStr);
+    const existingTokens = getOAuthTokens();
+    const incomingTokens = typeof tokens === 'string' ? JSON.parse(tokens) : tokens;
+    const merged = { ...(existingTokens || {}), ...(incomingTokens || {}) };
+    // Always preserve refresh_token if present in existing
+    if (!merged.refresh_token && existingTokens && existingTokens.refresh_token) {
+      merged.refresh_token = existingTokens.refresh_token;
+    }
+    setSetting('google_oauth_tokens', JSON.stringify(merged));
   }
   if (clientId) setSetting('google_oauth_client_id', clientId.trim());
   if (clientSecret) setSetting('google_oauth_client_secret', clientSecret.trim());
