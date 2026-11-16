@@ -791,6 +791,12 @@ router.put('/apps/:id', uploadAppAssets, async (req, res) => {
         console.warn(`[UpdateApp] Failed to delete previous Drive icon ${oldDriveIconId}:`, iconDelErr.message);
       }
     }
+    if (isNewIconProvided && existing.icon_url && existing.icon_url.startsWith('/uploads/icons/') && existing.icon_url !== iconUrl) {
+      const oldLocalIcon = path.join(iconsDir, path.basename(existing.icon_url));
+      if (fs.existsSync(oldLocalIcon)) {
+        try { fs.unlinkSync(oldLocalIcon); } catch {}
+      }
+    }
 
     // Handle File Update
     let fileUrl = req.body.file_url !== undefined ? req.body.file_url : existing.file_url;
@@ -838,6 +844,12 @@ router.put('/apps/:id', uploadAppAssets, async (req, res) => {
         await deleteFromGoogleDrive(oldDriveFileId);
       } catch (fileDelErr) {
         console.warn(`[UpdateApp] Failed to delete previous Drive file ${oldDriveFileId}:`, fileDelErr.message);
+      }
+    }
+    if (isNewFileProvided && existing.file_url && existing.file_url.startsWith('/uploads/files/') && existing.file_url !== fileUrl) {
+      const oldLocalPath = path.join(filesDir, path.basename(existing.file_url));
+      if (fs.existsSync(oldLocalPath)) {
+        try { fs.unlinkSync(oldLocalPath); } catch {}
       }
     }
 
