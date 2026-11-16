@@ -184,7 +184,7 @@ export default function HomePage() {
               onChange={(e) => setSortBy(e.target.value)}
               className="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl px-3 py-1.5 text-xs font-medium text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500"
             >
-              <option value="popular">Most Downloaded</option>
+              <option value="popular">Recommended</option>
               <option value="newest">Latest Release</option>
               <option value="rating">Top Rated</option>
               <option value="name">Alphabetical (A-Z)</option>

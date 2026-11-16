@@ -127,7 +127,7 @@ export default function AllAppsPage() {
             onChange={(e) => updateParam('sort', e.target.value)}
             className="bg-slate-800 text-slate-200 border border-slate-700/60 rounded-lg px-2.5 py-1.5 text-xs outline-none focus:ring-2 focus:ring-indigo-500"
           >
-            <option value="popular">Most Downloaded</option>
+            <option value="popular">Recommended</option>
             <option value="newest">Latest Added</option>
             <option value="rating">Top Rated</option>
             <option value="name">Name (A-Z)</option>

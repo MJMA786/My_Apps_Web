@@ -30,26 +30,7 @@ export default function AppCard({ app, onDownloadClick }) {
       onDownloadClick(app);
     } else {
       window.location.href = api.getDownloadUrl(app.slug);
-      try {
-        const cached = JSON.parse(localStorage.getItem('myapps_catalog_cache') || '[]');
-        if (Array.isArray(cached) && cached.length > 0) {
-          const updated = cached.map(item => {
-            if (item.slug === app.slug || item.id === app.id) {
-              return { ...item, download_count: (item.download_count || 0) + 1 };
-            }
-            return item;
-          });
-          localStorage.setItem('myapps_catalog_cache', JSON.stringify(updated));
-        }
-      } catch {}
     }
-  };
-
-  const formatDownloads = (num) => {
-    if (!num) return '0';
-    if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
-    if (num >= 1000) return `${(num / 1000).toFixed(1)}k`;
-    return num.toString();
   };
 
   return (
@@ -121,11 +102,12 @@ export default function AppCard({ app, onDownloadClick }) {
             <Star className="w-3.5 h-3.5 fill-amber-400" />
             <span>{app.rating ? app.rating.toFixed(1) : '5.0'}</span>
           </div>
-          <span className="text-slate-600">•</span>
-          <div className="flex items-center gap-1 text-slate-400" title="Total downloads">
-            <Download className="w-3.5 h-3.5 text-slate-400" />
-            <span>{formatDownloads(app.download_count)}</span>
-          </div>
+          {app.version && (
+            <>
+              <span className="text-slate-600">•</span>
+              <span className="text-slate-400 text-[11px]">v{app.version}</span>
+            </>
+          )}
           {app.file_size && (
             <>
               <span className="text-slate-600 hidden sm:inline">•</span>

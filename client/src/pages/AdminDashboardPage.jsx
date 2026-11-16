@@ -16,7 +16,8 @@ import {
   AlertTriangle,
   RefreshCw,
   Eye,
-  Settings
+  Settings,
+  Folder
 } from 'lucide-react';
 import { api } from '../services/api';
 import { PlatformIcon } from '../components/AppCard';
@@ -151,13 +152,13 @@ export default function AdminDashboardPage() {
 
           <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 backdrop-blur-sm space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-slate-400 font-medium">Total Downloads</span>
-              <Download className="w-4 h-4 text-emerald-400" />
+              <span className="text-xs text-slate-400 font-medium">Categories</span>
+              <Folder className="w-4 h-4 text-emerald-400" />
             </div>
             <div className="text-2xl font-extrabold text-white">
-              {stats.totalDownloads.toLocaleString()}
+              {stats.categories ? stats.categories.length : 0}
             </div>
-            <p className="text-[11px] text-emerald-400 font-medium">Across all platforms</p>
+            <p className="text-[11px] text-emerald-400 font-medium">Organized app groups</p>
           </div>
 
           <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 backdrop-blur-sm space-y-2">
@@ -225,7 +226,6 @@ export default function AdminDashboardPage() {
                 <th className="py-3.5 px-4">Application</th>
                 <th className="py-3.5 px-4">Platform & Category</th>
                 <th className="py-3.5 px-4">Version / Size</th>
-                <th className="py-3.5 px-4 text-center">Downloads</th>
                 <th className="py-3.5 px-4 text-center">Featured</th>
                 <th className="py-3.5 px-4 text-center">Status</th>
                 <th className="py-3.5 px-4 text-right">Actions</th>
@@ -234,14 +234,14 @@ export default function AdminDashboardPage() {
             <tbody className="divide-y divide-slate-800/60 text-slate-300">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-500">
+                  <td colSpan={6} className="py-12 text-center text-slate-500">
                     <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-400" />
                     Loading apps...
                   </td>
                 </tr>
               ) : apps.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-500">
+                  <td colSpan={6} className="py-12 text-center text-slate-500">
                     No apps found. Click "Upload New App" to get started!
                   </td>
                 </tr>
@@ -297,11 +297,6 @@ export default function AdminDashboardPage() {
                     <td className="py-3.5 px-4 font-mono text-[11px]">
                       <div className="text-white">v{app.version}</div>
                       <div className="text-slate-500">{app.file_size || 'N/A'}</div>
-                    </td>
-
-                    {/* Downloads */}
-                    <td className="py-3.5 px-4 text-center font-semibold text-white">
-                      {(app.download_count || 0).toLocaleString()}
                     </td>
 
                     {/* Featured Star Toggle */}
@@ -367,34 +362,6 @@ export default function AdminDashboardPage() {
           </table>
         </div>
       </div>
-
-      {/* Recent Download Logs */}
-      {stats && stats.recentDownloads && stats.recentDownloads.length > 0 && (
-        <div className="rounded-3xl bg-slate-900/60 border border-slate-800 p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-base font-bold text-white flex items-center gap-2">
-              <Activity className="w-4 h-4 text-indigo-400" />
-              <span>Real-Time Download Activity</span>
-            </h3>
-            <span className="text-xs text-slate-400">Last 10 downloads logged</span>
-          </div>
-
-          <div className="divide-y divide-slate-800/80 text-xs">
-            {stats.recentDownloads.map((log) => (
-              <div key={log.id} className="py-2.5 flex items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-2 h-2 rounded-full bg-emerald-400" />
-                  <span className="text-white font-medium">{log.app_title}</span>
-                  <span className="text-slate-500 font-mono text-[10px]">({log.ip_address})</span>
-                </div>
-                <div className="text-slate-500 text-[11px]">
-                  {new Date(log.downloaded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {new Date(log.downloaded_at).toLocaleDateString()}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Delete Confirmation Modal */}
       {deleteTarget && (
