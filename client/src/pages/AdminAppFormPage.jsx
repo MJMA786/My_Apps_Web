@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { 
   ArrowLeft, 
@@ -57,6 +57,7 @@ export default function AdminAppFormPage() {
   const [driveUploadStatus, setDriveUploadStatus] = useState('idle'); // 'idle' | 'uploading' | 'completed' | 'error'
   const [driveUploadedInfo, setDriveUploadedInfo] = useState(null);
   const [driveUploadError, setDriveUploadError] = useState('');
+  const ongoingDriveUploadRef = useRef(null);
   
   // Screenshots
   const [existingScreenshots, setExistingScreenshots] = useState([]);
@@ -164,45 +165,64 @@ export default function AdminAppFormPage() {
     }
   };
 
-  // Handle App package binary selection
-  const handleFileChange = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      setAppFile(file);
-      setDriveUploadStatus('idle');
-      setDriveUploadedInfo(null);
-      setDriveUploadError('');
-      // Auto calculate friendly file size
-      const bytes = file.size;
-      const k = 1024;
-      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-      const i = Math.floor(Math.log(bytes) / Math.log(k));
-      setFileSize((bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i]);
-    }
-  };
-
   // Direct Browser-to-Google Drive Upload
-  const handleDirectDriveUpload = async () => {
-    if (!appFile) return;
+  const performDriveUpload = async (fileToUpload) => {
+    const targetFile = fileToUpload || appFile;
+    if (!targetFile) return null;
+
     setDriveUploadStatus('uploading');
     setDriveUploadProgress(0);
     setDriveUploadError('');
 
     try {
-      const result = await api.uploadFileToDrive(appFile, (percent) => {
+      const uploadPromise = api.uploadFileToDrive(targetFile, (percent) => {
         setDriveUploadProgress(percent);
       });
+      ongoingDriveUploadRef.current = uploadPromise;
 
+      const result = await uploadPromise;
       setDriveUploadedInfo(result);
       setDriveUploadStatus('completed');
       setExternalDownloadUrl(result.directDownloadUrl);
       if (result.name) {
         setExistingFileName(result.name);
       }
+      return result;
     } catch (err) {
       console.error('Direct Drive upload error:', err);
       setDriveUploadStatus('error');
       setDriveUploadError(err.message || 'Direct upload to Google Drive failed.');
+      throw err;
+    } finally {
+      ongoingDriveUploadRef.current = null;
+    }
+  };
+
+  const handleDirectDriveUpload = () => {
+    performDriveUpload(appFile).catch(() => {});
+  };
+
+  // Handle App package binary selection
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setAppFile(file);
+      setDriveUploadedInfo(null);
+      setDriveUploadError('');
+
+      // Auto calculate friendly file size
+      const bytes = file.size;
+      const k = 1024;
+      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      setFileSize((bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i]);
+
+      // Speed optimization: Auto-start Google Drive upload in background immediately
+      if (driveConfigured && !isExternalLink) {
+        performDriveUpload(file).catch(() => {});
+      } else {
+        setDriveUploadStatus('idle');
+      }
     }
   };
 
@@ -257,28 +277,31 @@ export default function AdminAppFormPage() {
     setSubmitting(true);
 
     try {
-      // 1. If an app file was selected and Google Drive is configured, upload directly to Drive (bypasses serverless ephemeral limits)
+      // 1. If an app file was selected and Google Drive is configured, ensure upload to Drive is complete
       let activeDriveInfo = driveUploadedInfo;
-      if (!isExternalLink && appFile && !activeDriveInfo) {
-        if (driveConfigured) {
+      if (!isExternalLink) {
+        if (ongoingDriveUploadRef.current) {
           try {
-            setDriveUploadStatus('uploading');
-            setDriveUploadProgress(0);
-            activeDriveInfo = await api.uploadFileToDrive(appFile, (percent) => {
-              setDriveUploadProgress(percent);
-            });
-            setDriveUploadedInfo(activeDriveInfo);
-            setDriveUploadStatus('completed');
+            activeDriveInfo = await ongoingDriveUploadRef.current;
           } catch (uploadErr) {
-            setDriveUploadStatus('error');
-            setDriveUploadError(uploadErr.message || 'Direct upload to Google Drive failed.');
+            setError(uploadErr.message || 'Direct upload to Google Drive failed.');
             setSubmitting(false);
             return;
           }
-        } else if (appFile.size > 4.5 * 1024 * 1024) {
-          setError(`File (${fileSize}) exceeds Vercel's 4.5 MB limit. Please connect Google Drive in Settings or select "External Mirror URL".`);
-          setSubmitting(false);
-          return;
+        } else if (appFile && !activeDriveInfo) {
+          if (driveConfigured) {
+            try {
+              activeDriveInfo = await performDriveUpload(appFile);
+            } catch (uploadErr) {
+              setError(uploadErr.message || 'Direct upload to Google Drive failed.');
+              setSubmitting(false);
+              return;
+            }
+          } else if (appFile.size > 4.5 * 1024 * 1024) {
+            setError(`File (${fileSize}) exceeds Vercel's 4.5 MB limit. Please connect Google Drive in Settings or select "External Mirror URL".`);
+            setSubmitting(false);
+            return;
+          }
         }
       }
 
@@ -608,7 +631,7 @@ export default function AdminAppFormPage() {
                   </div>
                   <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1">
                     <span>{appFile ? appFile.name : 'Package file'} ({fileSize})</span>
-                    <span className="text-emerald-400 font-medium">Bypassing Vercel 4.5MB serverless limits</span>
+                    <span className="text-emerald-400 font-medium">⚡ Uploading in background — feel free to fill in details below while this finishes</span>
                   </div>
                 </div>
               )}

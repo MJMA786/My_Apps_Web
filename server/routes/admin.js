@@ -608,8 +608,8 @@ router.post('/apps', uploadAppAssets, async (req, res) => {
       } catch {}
     }
 
-    if (req.files && req.files.screenshots) {
-      for (const s of req.files.screenshots) {
+    if (req.files && req.files.screenshots && req.files.screenshots.length > 0) {
+      const screenshotUploads = req.files.screenshots.map(async (s) => {
         if (driveActive) {
           try {
             const driveRes = await uploadToGoogleDrive({
@@ -617,15 +617,19 @@ router.post('/apps', uploadAppAssets, async (req, res) => {
               originalName: s.originalname,
               mimeType: s.mimetype
             });
-            screenshotUrls.push(driveRes.previewUrl);
-            driveScreenshotIds.push(driveRes.driveFileId);
+            return { url: driveRes.previewUrl, driveId: driveRes.driveFileId };
           } catch (e) {
             console.error('[GoogleDrive] Screenshot upload failed, using local fallback:', e.message);
-            screenshotUrls.push(`/uploads/screenshots/${s.filename}`);
+            return { url: `/uploads/screenshots/${s.filename}`, driveId: null };
           }
         } else {
-          screenshotUrls.push(`/uploads/screenshots/${s.filename}`);
+          return { url: `/uploads/screenshots/${s.filename}`, driveId: null };
         }
+      });
+      const results = await Promise.all(screenshotUploads);
+      for (const res of results) {
+        screenshotUrls.push(res.url);
+        if (res.driveId) driveScreenshotIds.push(res.driveId);
       }
     }
 
@@ -783,13 +787,10 @@ router.put('/apps/:id', uploadAppAssets, async (req, res) => {
       (req.body.icon_url && req.body.icon_url !== existing.icon_url)
     );
 
+    const driveOldFilesToDelete = [];
+
     if (isNewIconProvided && oldDriveIconId && oldDriveIconId !== newDriveIconId) {
-      console.log(`[UpdateApp] Deleting previous Google Drive icon (${oldDriveIconId})...`);
-      try {
-        await deleteFromGoogleDrive(oldDriveIconId);
-      } catch (iconDelErr) {
-        console.warn(`[UpdateApp] Failed to delete previous Drive icon ${oldDriveIconId}:`, iconDelErr.message);
-      }
+      driveOldFilesToDelete.push(oldDriveIconId);
     }
     if (isNewIconProvided && existing.icon_url && existing.icon_url.startsWith('/uploads/icons/') && existing.icon_url !== iconUrl) {
       const oldLocalIcon = path.join(iconsDir, path.basename(existing.icon_url));
@@ -839,12 +840,7 @@ router.put('/apps/:id', uploadAppAssets, async (req, res) => {
     );
 
     if (isNewFileProvided && oldDriveFileId && oldDriveFileId !== newDriveFileId) {
-      console.log(`[UpdateApp] Deleting previous Google Drive package file (${oldDriveFileId})...`);
-      try {
-        await deleteFromGoogleDrive(oldDriveFileId);
-      } catch (fileDelErr) {
-        console.warn(`[UpdateApp] Failed to delete previous Drive file ${oldDriveFileId}:`, fileDelErr.message);
-      }
+      driveOldFilesToDelete.push(oldDriveFileId);
     }
     if (isNewFileProvided && existing.file_url && existing.file_url.startsWith('/uploads/files/') && existing.file_url !== fileUrl) {
       const oldLocalPath = path.join(filesDir, path.basename(existing.file_url));
@@ -878,8 +874,8 @@ router.put('/apps/:id', uploadAppAssets, async (req, res) => {
       currentDriveScreenshotIds = JSON.parse(existing.drive_screenshot_ids || '[]');
     } catch {}
 
-    if (req.files && req.files.screenshots) {
-      for (const s of req.files.screenshots) {
+    if (req.files && req.files.screenshots && req.files.screenshots.length > 0) {
+      const screenshotUploads = req.files.screenshots.map(async (s) => {
         if (driveActive) {
           try {
             const driveRes = await uploadToGoogleDrive({
@@ -887,14 +883,18 @@ router.put('/apps/:id', uploadAppAssets, async (req, res) => {
               originalName: s.originalname,
               mimeType: s.mimetype
             });
-            currentScreenshots.push(driveRes.previewUrl);
-            currentDriveScreenshotIds.push(driveRes.driveFileId);
+            return { url: driveRes.previewUrl, driveId: driveRes.driveFileId };
           } catch (e) {
-            currentScreenshots.push(`/uploads/screenshots/${s.filename}`);
+            return { url: `/uploads/screenshots/${s.filename}`, driveId: null };
           }
         } else {
-          currentScreenshots.push(`/uploads/screenshots/${s.filename}`);
+          return { url: `/uploads/screenshots/${s.filename}`, driveId: null };
         }
+      });
+      const results = await Promise.all(screenshotUploads);
+      for (const res of results) {
+        currentScreenshots.push(res.url);
+        if (res.driveId) currentDriveScreenshotIds.push(res.driveId);
       }
     }
 
@@ -905,12 +905,18 @@ router.put('/apps/:id', uploadAppAssets, async (req, res) => {
         if (Array.isArray(oldScreenshotIds)) {
           for (const sId of oldScreenshotIds) {
             const stillUsed = currentScreenshots.some(url => url && url.includes(sId));
-            if (!stillUsed) {
-              deleteFromGoogleDrive(sId).catch(() => {});
+            if (!stillUsed && !driveOldFilesToDelete.includes(sId)) {
+              driveOldFilesToDelete.push(sId);
             }
           }
         }
       } catch {}
+    }
+
+    // Parallelize all old Google Drive file deletions (icon, binary, removed screenshots)
+    if (driveOldFilesToDelete.length > 0) {
+      console.log(`[UpdateApp] Concurrently deleting ${driveOldFilesToDelete.length} obsolete file(s) from Drive...`);
+      await Promise.allSettled(driveOldFilesToDelete.map(fId => deleteFromGoogleDrive(fId)));
     }
 
     // Features format
@@ -1020,37 +1026,34 @@ router.delete('/apps/:id', async (req, res) => {
       return res.status(404).json({ error: 'App not found' });
     }
 
-    // 1. Delete app package file from Google Drive
+    // 1. Collect all Google Drive file IDs associated with this app (binary, icon, screenshots)
     const fileIdToDelete = app.drive_file_id || extractDriveFileId(app.file_url) || extractDriveFileId(app.external_download_url);
-    if (fileIdToDelete) {
-      console.log(`[DeleteApp] Removing app binary from Google Drive (${fileIdToDelete})...`);
-      try {
-        await deleteFromGoogleDrive(fileIdToDelete);
-      } catch (err) {
-        console.warn(`[DeleteApp] Failed to delete file ${fileIdToDelete} from Drive:`, err.message);
-      }
-    }
-
-    // 2. Delete icon from Google Drive
     const iconIdToDelete = app.drive_icon_id || extractDriveFileId(app.icon_url);
-    if (iconIdToDelete) {
-      try {
-        await deleteFromGoogleDrive(iconIdToDelete);
-      } catch (err) {
-        console.warn(`[DeleteApp] Failed to delete icon ${iconIdToDelete} from Drive:`, err.message);
-      }
-    }
+    const driveDeletionPromises = [];
 
-    // 3. Delete screenshots from Google Drive
+    if (fileIdToDelete) {
+      driveDeletionPromises.push(deleteFromGoogleDrive(fileIdToDelete));
+    }
+    if (iconIdToDelete && iconIdToDelete !== fileIdToDelete) {
+      driveDeletionPromises.push(deleteFromGoogleDrive(iconIdToDelete));
+    }
     if (app.drive_screenshot_ids) {
       try {
         const ids = JSON.parse(app.drive_screenshot_ids);
         if (Array.isArray(ids)) {
           for (const sId of ids) {
-            await deleteFromGoogleDrive(sId);
+            if (sId && !driveDeletionPromises.includes(sId)) {
+              driveDeletionPromises.push(deleteFromGoogleDrive(sId));
+            }
           }
         }
       } catch {}
+    }
+
+    // Run all Drive deletions concurrently in parallel (drastically reduces delete time)
+    if (driveDeletionPromises.length > 0) {
+      console.log(`[DeleteApp] Concurrently deleting ${driveDeletionPromises.length} files from Google Drive for app "${app.title}"...`);
+      await Promise.allSettled(driveDeletionPromises);
     }
 
     // 4. Clean up any local files if they existed
