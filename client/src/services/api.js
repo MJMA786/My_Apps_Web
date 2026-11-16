@@ -60,7 +60,7 @@ export const api = {
     const res = await fetch(`${API_BASE}/apps?${query.toString()}`);
     if (!res.ok) throw new Error('Failed to fetch apps');
     const data = await res.json();
-    if (data.apps && Array.isArray(data.apps) && data.apps.length > 0) {
+    if (data.apps && Array.isArray(data.apps)) {
       try {
         localStorage.setItem('myapps_catalog_cache', JSON.stringify(data.apps));
       } catch {}
@@ -138,7 +138,7 @@ export const api = {
     });
     if (!res.ok) throw new Error('Failed to fetch admin apps');
     const data = await res.json();
-    if (Array.isArray(data) && data.length > 0) {
+    if (Array.isArray(data)) {
       try {
         localStorage.setItem('myapps_catalog_cache', JSON.stringify(data));
       } catch {}
@@ -181,6 +181,12 @@ export const api = {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to delete app');
+    try {
+      const cached = JSON.parse(localStorage.getItem('myapps_catalog_cache') || '[]');
+      if (Array.isArray(cached)) {
+        localStorage.setItem('myapps_catalog_cache', JSON.stringify(cached.filter(a => a.id !== id && String(a.id) !== String(id))));
+      }
+    } catch {}
     return data;
   },
 
@@ -389,5 +395,13 @@ export const api = {
       } catch {}
     }
     return data;
+  },
+
+  async cleanupOrphanedDriveFiles() {
+    const res = await fetch(`${API_BASE}/admin/drive/cleanup-orphans`, {
+      method: 'POST',
+      headers: getAuthHeaders()
+    });
+    return parseJsonResponse(res, 'Failed to clean orphaned Drive files');
   }
 };

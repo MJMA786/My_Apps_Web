@@ -37,17 +37,17 @@ export default function AllAppsPage() {
           sort,
           limit: 36
         });
-        let appList = data.apps || [];
-        if (appList.length === 0 && !search && category === 'All' && platform === 'All') {
-          try {
-            const cached = JSON.parse(localStorage.getItem('myapps_catalog_cache') || '[]');
-            if (cached.length > 0) appList = cached;
-          } catch {}
-        }
-        setApps(appList);
-        setTotal(data.pagination ? data.pagination.total : appList.length);
+        setApps(data.apps || []);
+        setTotal(data.pagination ? data.pagination.total : (data.apps ? data.apps.length : 0));
       } catch (err) {
         console.error('Failed to load apps:', err);
+        try {
+          const cached = JSON.parse(localStorage.getItem('myapps_catalog_cache') || '[]');
+          if (cached.length > 0) {
+            setApps(cached);
+            setTotal(cached.length);
+          }
+        } catch {}
       } finally {
         setLoading(false);
       }

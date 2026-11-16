@@ -39,21 +39,18 @@ export default function HomePage() {
           api.getCategories(),
           api.getPlatforms()
         ]);
-        let finalFeatured = featuredRes;
-        if (!featuredRes || featuredRes.length === 0) {
-          try {
-            const cached = JSON.parse(localStorage.getItem('myapps_catalog_cache') || '[]');
-            if (cached.length > 0) {
-              const feat = cached.filter(a => a.is_featured);
-              finalFeatured = feat.length > 0 ? feat : cached.slice(0, 6);
-            }
-          } catch {}
-        }
-        setFeaturedApps(finalFeatured || []);
+        setFeaturedApps(featuredRes || []);
         setCategories(catRes || []);
         setPlatforms(platRes || []);
       } catch (err) {
         console.error('Failed to load initial data:', err);
+        try {
+          const cached = JSON.parse(localStorage.getItem('myapps_catalog_cache') || '[]');
+          if (cached.length > 0) {
+            const feat = cached.filter(a => a.is_featured);
+            setFeaturedApps(feat.length > 0 ? feat : cached.slice(0, 6));
+          }
+        } catch {}
       }
     }
     loadInitial();
@@ -71,16 +68,13 @@ export default function HomePage() {
           sort: sortBy,
           limit: 24
         });
-        let appList = data.apps || [];
-        if (appList.length === 0 && !search && selectedCategory === 'All' && selectedPlatform === 'All') {
-          try {
-            const cached = JSON.parse(localStorage.getItem('myapps_catalog_cache') || '[]');
-            if (cached.length > 0) appList = cached;
-          } catch {}
-        }
-        setApps(appList);
+        setApps(data.apps || []);
       } catch (err) {
         console.error('Failed to query apps:', err);
+        try {
+          const cached = JSON.parse(localStorage.getItem('myapps_catalog_cache') || '[]');
+          if (cached.length > 0) setApps(cached);
+        } catch {}
       } finally {
         setLoading(false);
       }

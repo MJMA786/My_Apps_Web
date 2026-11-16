@@ -22,7 +22,8 @@ import {
   LogOut,
   Sparkles,
   Download,
-  Upload
+  Upload,
+  Trash2
 } from 'lucide-react';
 
 export default function AdminSettingsPage() {
@@ -258,6 +259,26 @@ export default function AdminSettingsPage() {
     }
   };
 
+  const [cleaningOrphans, setCleaningOrphans] = useState(false);
+
+  const handleCleanOrphanedFiles = async () => {
+    if (!confirm('This will scan your Google Drive folder and permanently delete any older files or versions not linked to any active apps in your catalog. Continue?')) {
+      return;
+    }
+    setCleaningOrphans(true);
+    setError('');
+    setSuccess('');
+    try {
+      const res = await api.cleanupOrphanedDriveFiles();
+      setSuccess(res.message);
+      await loadDriveStatus();
+    } catch (err) {
+      setError('Drive Cleanup Error: ' + err.message);
+    } finally {
+      setCleaningOrphans(false);
+    }
+  };
+
   // Catalog Cloud Persistence states & handlers
   const [backingUpCatalog, setBackingUpCatalog] = useState(false);
   const [restoringCatalog, setRestoringCatalog] = useState(false);
@@ -430,6 +451,16 @@ export default function AdminSettingsPage() {
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${testingDrive ? 'animate-spin' : ''}`} />
                 <span>Test Connection</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleCleanOrphanedFiles}
+                disabled={cleaningOrphans}
+                title="Deletes unreferenced files and older app versions from your Drive folder"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/30 text-xs font-medium transition-colors"
+              >
+                <Trash2 className={`w-3.5 h-3.5 ${cleaningOrphans ? 'animate-spin' : ''}`} />
+                <span>{cleaningOrphans ? 'Cleaning...' : 'Clean Unused Files'}</span>
               </button>
               <button
                 type="button"

@@ -714,3 +714,55 @@ export async function fetchCatalogFromGoogleDrive() {
     return null;
   }
 }
+
+// Scan Google Drive folder and remove any files that are NOT referenced by any active apps
+export async function cleanupOrphanedDriveFiles(activeFileIds = new Set()) {
+  try {
+    const authInfo = getDriveAuth();
+    if (!authInfo) throw new Error('Google Drive is not connected.');
+
+    const drive = google.drive({ version: 'v3', auth: authInfo.auth });
+    const folderId = getDriveFolderId();
+    const catalogFileId = getSetting('google_drive_catalog_file_id');
+    if (catalogFileId) activeFileIds.add(catalogFileId);
+
+    let query = "trashed = false";
+    if (folderId) {
+      query += ` and '${folderId}' in parents`;
+    }
+
+    const listRes = await drive.files.list({
+      q: query,
+      fields: 'files(id, name, mimeType)',
+      spaces: 'drive',
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+      pageSize: 100
+    });
+
+    const files = listRes.data.files || [];
+    const deletedFiles = [];
+
+    for (const file of files) {
+      // Don't delete catalog backup or active app assets
+      if (file.name === 'myapps_catalog.json') continue;
+      if (activeFileIds.has(file.id)) continue;
+
+      try {
+        console.log(`[DriveCleanup] Deleting orphaned file ${file.name} (${file.id})...`);
+        await drive.files.delete({ fileId: file.id, supportsAllDrives: true });
+        deletedFiles.push({ id: file.id, name: file.name });
+      } catch (err) {
+        console.warn(`[DriveCleanup] Failed to delete ${file.id}:`, err.message);
+      }
+    }
+
+    return {
+      deletedCount: deletedFiles.length,
+      deletedFiles
+    };
+  } catch (err) {
+    console.error('[GoogleDrive] Error cleaning orphaned files:', err.message);
+    throw err;
+  }
+}

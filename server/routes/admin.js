@@ -30,7 +30,8 @@ import {
   saveCatalogToGoogleDrive,
   fetchCatalogFromGoogleDrive,
   extractDriveFileId,
-  formatDirectDriveDownloadUrl
+  formatDirectDriveDownloadUrl,
+  cleanupOrphanedDriveFiles
 } from '../services/googleDrive.js';
 import { ensureAppsLoaded } from './apps.js';
 
@@ -313,6 +314,45 @@ router.post('/drive/finish-upload', async (req, res) => {
   } catch (err) {
     console.error('Error finalizing drive upload:', err);
     res.status(400).json({ error: err.message });
+  }
+});
+
+// Scan Google Drive and clean up any orphaned files not referenced by active apps
+router.post('/drive/cleanup-orphans', async (req, res) => {
+  try {
+    await ensureAppsLoaded();
+    const allApps = getAllAppsFromDb();
+
+    // Collect all active file IDs in database
+    const activeFileIds = new Set();
+    for (const app of allApps) {
+      if (app.drive_file_id) activeFileIds.add(app.drive_file_id);
+      if (app.drive_icon_id) activeFileIds.add(app.drive_icon_id);
+      const fid = extractDriveFileId(app.file_url) || extractDriveFileId(app.external_download_url);
+      if (fid) activeFileIds.add(fid);
+      const iconId = extractDriveFileId(app.icon_url);
+      if (iconId) activeFileIds.add(iconId);
+      if (app.drive_screenshot_ids) {
+        try {
+          const ids = JSON.parse(app.drive_screenshot_ids);
+          if (Array.isArray(ids)) ids.forEach(id => activeFileIds.add(id));
+        } catch {}
+      }
+    }
+
+    const result = await cleanupOrphanedDriveFiles(activeFileIds);
+    // Also save current fresh catalog to Drive
+    await saveCatalogToGoogleDrive(allApps);
+
+    res.json({
+      success: true,
+      message: `Cleaned up ${result.deletedCount} unused/previous files from your Google Drive.`,
+      deletedCount: result.deletedCount,
+      deletedFiles: result.deletedFiles
+    });
+  } catch (err) {
+    console.error('Error cleaning orphaned Drive files:', err);
+    res.status(500).json({ error: 'Failed to clean unused files: ' + err.message });
   }
 });
 
@@ -941,10 +981,10 @@ router.put('/apps/:id', uploadAppAssets, async (req, res) => {
     try {
       const allApps = getAllAppsFromDb();
       saveCatalogSnapshot(allApps);
-      saveCatalogToGoogleDrive(allApps).catch(err => {
-        console.warn('[GoogleDrive] Catalog sync error:', err.message);
-      });
-    } catch {}
+      await saveCatalogToGoogleDrive(allApps);
+    } catch (catalogErr) {
+      console.warn('[GoogleDrive] Catalog sync error on update:', catalogErr.message);
+    }
 
     res.json({
       success: true,
@@ -1025,10 +1065,10 @@ router.delete('/apps/:id', async (req, res) => {
     try {
       const allApps = getAllAppsFromDb();
       saveCatalogSnapshot(allApps);
-      saveCatalogToGoogleDrive(allApps).catch(err => {
-        console.warn('[GoogleDrive] Catalog sync error:', err.message);
-      });
-    } catch {}
+      await saveCatalogToGoogleDrive(allApps);
+    } catch (catalogErr) {
+      console.warn('[GoogleDrive] Catalog sync error on delete:', catalogErr.message);
+    }
 
     res.json({
       success: true,
